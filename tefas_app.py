@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from tefas.crawler import Crawler
+from tefas import Crawler
 from datetime import datetime
 import plotly.express as px
 
