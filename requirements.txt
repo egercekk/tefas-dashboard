@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 tefas
+webdriver-manager
