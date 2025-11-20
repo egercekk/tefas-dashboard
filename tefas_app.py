@@ -1,29 +1,4 @@
 import streamlit as st
-import hashlib
-
-def _hash_password(pwd: str) -> str:
-    return hashlib.sha256(pwd.encode()).hexdigest()
-
-def check_password():
-    REAL_HASH = st.secrets["auth"]["password_hash"]
-
-    if "password_ok" not in st.session_state:
-        st.session_state["password_ok"] = False
-
-    if not st.session_state["password_ok"]:
-        st.markdown("### 🔒 Access Protection")
-        password = st.text_input("Enter the password:", type="password")
-
-        if st.button("Login"):
-            if _hash_password(password) == REAL_HASH:
-                st.session_state["password_ok"] = True
-                st.rerun()                # ✔️ DOĞRU KOMUT (experimental değil)
-            else:
-                st.error("❌ Wrong password")
-
-        st.stop()
-
-import streamlit as st
 import pandas as pd
 import numpy as np
 import math
@@ -32,6 +7,63 @@ import plotly.express as px
 
 from tefas import Crawler
 
+# ============================================================
+# 🔐 PASSWORD PROTECTION
+# ============================================================
+
+import hashlib
+
+def _hash_password(pwd: str) -> str:
+    """SHA256 hash function"""
+    return hashlib.sha256(pwd.encode()).hexdigest()
+
+def check_password():
+    """Password gate using Streamlit Secrets"""
+    # Secrets içindeki hash'i alıyoruz
+    REAL_HASH = st.secrets["auth"]["password_hash"]
+
+    # Session state üzerinde password flag'i yoksa ekle
+    if "password_ok" not in st.session_state:
+        st.session_state["password_ok"] = False
+
+    # Henüz giriş yapılmamışsa login ekranını göster
+    if not st.session_state["password_ok"]:
+        st.markdown("### 🔒 Access Protection")
+        password = st.text_input("Enter the password:", type="password")
+
+        if st.button("Login"):
+            if _hash_password(password) == REAL_HASH:
+                st.session_state["password_ok"] = True
+                st.rerun()  # ❗ Streamlit 1.30+ doğru komut
+            else:
+                st.error("❌ Wrong password")
+
+        # Şifre yanlışsa veya boşsa uygulamanın geri kalanını durdur
+        st.stop()
+
+# ============================================================
+# Streamlit UI Başlangıcı
+# ============================================================
+
+st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
+
+# 🔑 ŞİFRE KONTROLÜ (Uygulamanın devamı bundan SONRA gelir)
+check_password()
+
+# ============================================================
+# BUNDAN SONRASINA SENİN ORİJİNAL DASHBOARD KODUN GELİYOR
+# (CSS, sidebar, macro page, charts vs.)
+# ============================================================
+
+# Örnek olarak:
+st.markdown(
+    """
+    <style>
+    .stApp { background-color: #020617; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ------------------------------------------
 # TEFAS DATA FETCH
