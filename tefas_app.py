@@ -3,11 +3,9 @@ import hashlib
 
 st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
 
-def _hash_password(pwd: str) -> str:
-    return hashlib.sha256(pwd.encode()).hexdigest()
-
 def check_password():
-    REAL_HASH = st.secrets["auth"]["password_hash"]
+    # Şifreyi secrets'tan alıyoruz
+    REAL_PASSWORD = st.secrets["auth"]["password"]
 
     if "password_ok" not in st.session_state:
         st.session_state["password_ok"] = False
@@ -16,7 +14,7 @@ def check_password():
         st.markdown("### 🔒 Access Protection")
         password = st.text_input("Enter the password:", type="password")
         if st.button("Login"):
-            if _hash_password(password) == REAL_HASH:
+            if password == REAL_PASSWORD:
                 st.session_state["password_ok"] = True
                 st.experimental_rerun()
             else:
