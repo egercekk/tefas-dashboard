@@ -89,8 +89,8 @@ def fetch_tefas(codes, start, end, kind):
 
 def fetch_tefas_all(start, end, kind=None):
     """
-    Macro sekmesinde kullanılacak: tek fon kodu yerine,
-    seçilen türdeki (ya da tüm) fonları topluca çekmek için.
+    Used in Macro tab: fetch all funds for a given type (or all types),
+    instead of a single code.
     """
     crawler = Crawler()
     df = crawler.fetch(start=start, end=end, name=None, kind=kind)
@@ -158,9 +158,9 @@ def binom_cdf(k: int, n: int, p: float) -> float:
 # ------------------------------------------
 # STREAMLIT DASHBOARD
 # ------------------------------------------
-st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
+st.set_page_config(page_title="TEFAS Funds", page_icon="📈", layout="wide")
 
-# --------- GENEL STİL (DARK + SOL MENÜ) ----------
+# --------- GLOBAL STYLE (DARK + LEFT MENU) ----------
 st.markdown(
     """
     <style>
@@ -202,6 +202,14 @@ st.markdown(
         border-left: 3px solid #3b82f6;
         color: #ffffff;
     }
+        div[data-testid="stRadio"] div[role="radiogroup"] > label {
+        margin-bottom: 60px;
+    }
+
+    div[data-testid="stRadio"] button {
+        margin-bottom: 60px;
+    }
+    
     div[data-testid="stRadio"] button[aria-checked="false"]:hover {
         background-color: #030712;
     }
@@ -227,41 +235,103 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --------- SIDEBAR (SOLDAN MENÜ) ----------
+# --------- LANGUAGE STATE & HELPER (ENGLISH ONLY) ----------
+if "lang" not in st.session_state:
+    st.session_state["lang"] = "EN"
+
+
+def _t(tr: str, en: str) -> str:
+    """Return English text only (app is fully in English)."""
+    return en
+
+
+# --------- SIDEBAR (LEFT MENU) ----------
 with st.sidebar:
+    # Language selector removed – app is fully English
+
+    SECTION_KEYS = [
+        "macro",
+        "raw",
+        "deltas",
+        "charts",
+        "compare",
+        "stats",
+        "prob",
+        "arb",
+        "research",
+    ]
+
+    def section_label(key: str) -> str:
+        labels = {
+            "macro": _t("🌐 Makro", "🌐 MACRO"),
+            "raw": _t("📄 Ham Veri", "📄 RAW DATA"),
+            "deltas": _t("📌 Günlük Farklar", "📌 DELTAS"),
+            "charts": _t("📊 Grafikler", "📊 CHARTS"),
+            "compare": _t("🔍 Karşılaştır", "🔍 COMPARE"),
+            "stats": _t("📈 İstatistikler", "📈 STATISTICS"),
+            "prob": _t("🎲 Olasılık", "🎲 PROBABILITY"),
+            "arb": _t("🔁 Arbitraj", "🔁 ARBITRAGE"),
+            "research": _t("📚 Araştırma", "📚 RESEARCH"),
+        }
+        return labels[key]
+
     main_page = st.radio(
-        "Sections",
-        [
-            "🌐 Macro",
-            "📄 Raw Data",
-            "📌 Deltas",
-            "📊 Charts",
-            "🔍 Compare",      # ✅ yeni sekme
-            "📈 Statistics",
-            "🎲 Probability",
-            "🔁 Arbitrage",
-        ],
+        _t("Bölümler", "Sections"),
+        SECTION_KEYS,
         label_visibility="collapsed",
         index=0,
+        format_func=section_label,
     )
 
-# --------- ANA SAYFA BAŞLIK ----------
+# --------- MAIN TITLE ----------
 st.markdown(
-    "<h1 style='text-align: center;'>📈 TEFAS Fund Dashboard</h1>",
+    "<h1 style='text-align: center;'>📈 TEFAS Funds</h1>",
     unsafe_allow_html=True,
 )
 
 # ==========================================
-# INPUTLAR
+# INPUTS
 # ==========================================
 
-if main_page == "🌐 Macro":
+# Fund type / codes
+if main_page == "macro":
     kind = st.selectbox("Fund Type", ["YAT", "EMK", "BYF"], key="kind_macro")
-    codes_text = ""  # kullanılmayacak
+    codes_text = ""  # not used in macro
 else:
-    codes_text = st.text_input("Fund Codes (comma separated):", "SPN", key="codes_text")
+    codes_text = st.text_input(
+        "Fund Codes (comma separated):",
+        "SPN",
+        key="codes_text",
+    )
     kind = st.selectbox("Fund Type", ["YAT", "EMK", "BYF"], key="kind_normal")
 
+# If we are in Research tab: show only link page, stop other logic
+if main_page == "research":
+    st.subheader("📚 Research – Quick Links")
+
+    st.markdown(
+        "Use the links below to quickly open the official TEFAS fund / data pages."
+    )
+
+    # Global TEFAS link (only TEFAS, KAP removed)
+    st.markdown(
+        """
+- [TEFAS - Fund Information](https://www.tefas.gov.tr/)
+        """
+    )
+
+    # If user entered fund codes, show TEFAS-only quick links per code
+    codes_for_links = [c.strip().upper() for c in codes_text.split(",") if c.strip()]
+    if codes_for_links:
+        st.markdown("---")
+        st.markdown("Quick links for entered fund codes:")
+        for code in sorted(set(codes_for_links)):
+            tefas_url = f"https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod={code}"
+            st.markdown(f"- **{code}** → [TEFAS]({tefas_url})")
+
+    st.stop()  # stop all other calculations on Research page
+
+# Dates
 col1, col2, col3 = st.columns([1, 1, 1.2])
 
 default_start = datetime(2025, 10, 19)
@@ -270,18 +340,24 @@ default_end = datetime(2025, 11, 18)
 start = col1.date_input("Start Date", default_start)
 end = col2.date_input("End Date", default_end)
 
-quick_range = col3.selectbox(
+# Quick range
+quick_range_options = [
+    ("custom", "Custom"),
+    ("ytd", "Year-to-date (YTD)"),
+    ("3m", "Last 3 Months"),
+    ("6m", "Last 6 Months"),
+    ("1y", "Last 1 Year"),
+]
+
+quick_range_label = col3.selectbox(
     "Quick Range",
-    [
-        "Custom",
-        "Year-to-date (YTD)",
-        "Last 3 Months",
-        "Last 6 Months",
-        "Last 1 Year",
-    ],
+    [lbl for key, lbl in quick_range_options],
     index=0,
     help="Choose a predefined date range or keep 'Custom' to use the selected start/end dates.",
 )
+
+# label -> key
+quick_range_key = [k for k, lbl in quick_range_options if lbl == quick_range_label][0]
 
 # ------------------------------------------
 # FETCH BUTTON
@@ -291,14 +367,14 @@ if st.button("📥 Fetch Data"):
     effective_end = end
     today = datetime.today().date()
 
-    if quick_range != "Custom":
-        if quick_range == "Year-to-date (YTD)":
+    if quick_range_key != "custom":
+        if quick_range_key == "ytd":
             effective_start = datetime(today.year, 1, 1).date()
-        elif quick_range == "Last 3 Months":
+        elif quick_range_key == "3m":
             effective_start = today - timedelta(days=90)
-        elif quick_range == "Last 6 Months":
+        elif quick_range_key == "6m":
             effective_start = today - timedelta(days=180)
-        elif quick_range == "Last 1 Year":
+        elif quick_range_key == "1y":
             effective_start = today - timedelta(days=365)
         effective_end = today
 
@@ -310,23 +386,23 @@ if st.button("📥 Fetch Data"):
 
     else:
         # ======================================================
-        # 1) MACRO SEKME
+        # 1) MACRO TAB
         # ======================================================
-        if main_page == "🌐 Macro":
+        if main_page == "macro":
             macro_df = fetch_tefas_all(
                 str(effective_start), str(effective_end), kind=kind
             )
 
             if macro_df.empty:
                 st.error(
-                    "❌ Seçilen tarih aralığı ve tür için TEFAS'tan veri dönmedi. "
-                    "Tarih aralığını genişletmeyi veya fon türünü değiştirmeyi deneyin."
+                    "❌ No TEFAS data returned for the selected date range and type. "
+                    "Try expanding the date range or changing the fund type."
                 )
             else:
                 macro_df["date"] = pd.to_datetime(macro_df["date"])
                 macro_df = move_zero_columns_last(macro_df)
 
-                # ---- Son gün ve metrikler ----
+                # ---- Last day & metrics ----
                 last_day = macro_df["date"].max()
                 latest = macro_df[macro_df["date"] == last_day].copy()
 
@@ -342,12 +418,20 @@ if st.button("📥 Fetch Data"):
 
                 col_m1, col_m2 = st.columns(2)
                 if n_funds is not None:
-                    col_m1.metric("Number of Funds", fmt_int(n_funds))
+                    col_m1.metric(
+                        "Number of Funds",
+                        fmt_int(n_funds),
+                    )
                 if total_aum is not None:
-                    col_m2.metric("Total AUM (Last Day)", fmt_int(total_aum))
+                    col_m2.metric(
+                        "Total AUM (Last Day)",
+                        fmt_int(total_aum),
+                    )
 
-                # ---- Top 20 & Bottom 20 grafikleri ----
-                st.markdown("### Top & Bottom 20 Funds by AUM (Last Day)")
+                # ---- Top 20 & Bottom 20 charts ----
+                st.markdown(
+                    "### Top & Bottom 20 Funds by AUM (Last Day)"
+                )
 
                 if "market_cap" in latest.columns:
                     # Top 20
@@ -365,7 +449,10 @@ if st.button("📥 Fetch Data"):
                             top20,
                             x="code",
                             y="market_cap",
-                            labels={"code": "Fund", "market_cap": "Market Cap"},
+                            labels={
+                                "code": "Fund",
+                                "market_cap": "Market Cap",
+                            },
                         )
                         st.plotly_chart(fig_top, use_container_width=True)
 
@@ -376,7 +463,10 @@ if st.button("📥 Fetch Data"):
                             bottom20,
                             x="code",
                             y="market_cap",
-                            labels={"code": "Fund", "market_cap": "Market Cap"},
+                            labels={
+                                "code": "Fund",
+                                "market_cap": "Market Cap",
+                            },
                         )
                         st.plotly_chart(fig_bottom, use_container_width=True)
 
@@ -386,7 +476,7 @@ if st.button("📥 Fetch Data"):
 
                 macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
 
-                # Kolon grupları
+                # Column groups
                 percent_cols_all = [
                     "other",
                     "government_bond",
@@ -432,7 +522,7 @@ if st.button("📥 Fetch Data"):
                 st.dataframe(macro_styled, hide_index=True)
 
         # ======================================================
-        # 2) DİĞER SEKME LOGİĞİ
+        # 2) OTHER TABS
         # ======================================================
         else:
             codes = [c.strip().upper() for c in codes_text.split(",") if c.strip()]
@@ -441,7 +531,7 @@ if st.button("📥 Fetch Data"):
             if data.empty:
                 st.error(
                     "❌ No data returned for the selected funds and date range. "
-                    "Try expanding the date range or confirming the fund codes and type."
+                    "Try expanding the date range or confirming the fund codes and type.",
                 )
             else:
                 data["date"] = pd.to_datetime(data["date"]).dt.strftime("%Y-%m-%d")
@@ -478,7 +568,7 @@ if st.button("📥 Fetch Data"):
                 delta_cols = int_cols + percent_cols + float_cols
 
                 # -------- RAW DATA PAGE --------
-                if main_page == "📄 Raw Data":
+                if main_page == "raw":
                     st.subheader("🧾 Raw Data")
 
                     display_map_raw = {col: pretty(col) for col in data.columns}
@@ -496,7 +586,7 @@ if st.button("📥 Fetch Data"):
                     st.dataframe(data_styled, hide_index=True)
 
                 # -------- DELTAS PAGE --------
-                elif main_page == "📌 Deltas":
+                elif main_page == "deltas":
                     st.subheader("📌 Last Values (Δ vs Previous Day)")
 
                     delta_df = data.copy()
@@ -530,11 +620,13 @@ if st.button("📥 Fetch Data"):
                     st.dataframe(delta_styled, hide_index=True)
 
                 # -------- CHARTS PAGE --------
-                elif main_page == "📊 Charts":
+                elif main_page == "charts":
                     st.subheader("📊 Price Chart")
 
                     if "price" in data.columns:
-                        fig_price = px.line(data, x="date", y="price", color="code")
+                        fig_price = px.line(
+                            data, x="date", y="price", color="code"
+                        )
                         fig_price.update_layout(
                             title="Fund Price Evolution Over Time",
                             xaxis_title="Date",
@@ -544,7 +636,7 @@ if st.button("📥 Fetch Data"):
                     else:
                         st.info(
                             "⚠️ Column **'price'** is not available in the returned dataset. "
-                            "Price chart cannot be generated for this selection."
+                            "Price chart cannot be generated for this selection.",
                         )
 
                     st.markdown("---")
@@ -553,7 +645,8 @@ if st.button("📥 Fetch Data"):
                     if percent_cols:
                         codes_unique = sorted(data["code"].unique())
                         selected_code = st.selectbox(
-                            "Select fund for allocation charts", codes_unique
+                            "Select fund for allocation charts",
+                            codes_unique,
                         )
 
                         latest_alloc = (
@@ -595,17 +688,17 @@ if st.button("📥 Fetch Data"):
                     else:
                         st.info(
                             "No allocation (percentage) columns are available in the dataset. "
-                            "Allocation charts cannot be generated for this selection."
+                            "Allocation charts cannot be generated for this selection.",
                         )
 
                 # -------- COMPARE PAGE --------
-                elif main_page == "🔍 Compare":
+                elif main_page == "compare":
                     st.subheader("🔍 Compare Funds")
 
                     if "price" not in data.columns:
                         st.warning(
                             "⚠️ Column **'price'** is missing. "
-                            "The Compare tab requires the price column to calculate returns."
+                            "The Compare tab requires the price column to calculate returns.",
                         )
                     else:
                         all_codes = sorted(data["code"].unique())
@@ -616,7 +709,9 @@ if st.button("📥 Fetch Data"):
                         )
 
                         if len(selected_codes) == 0:
-                            st.info("Select at least one fund to compare.")
+                            st.info(
+                                "Select at least one fund to compare.",
+                            )
                         else:
                             comp = data[data["code"].isin(selected_codes)].copy()
                             comp["date"] = pd.to_datetime(comp["date"])
@@ -625,7 +720,7 @@ if st.button("📥 Fetch Data"):
                             )
                             comp = comp.dropna(subset=["price"])
 
-                            # ---- Son gün metrik tablosu (TEFAS benzeri) ----
+                            # ---- Last day metrics table (TEFAS-like) ----
                             last_rows = (
                                 comp.sort_values(["code", "date"])
                                 .groupby("code")
@@ -673,7 +768,7 @@ if st.button("📥 Fetch Data"):
                                 st.dataframe(mt_df, hide_index=True)
                             else:
                                 st.info(
-                                    "No metric columns available for selected funds."
+                                    "No metric columns available for selected funds.",
                                 )
 
                             st.markdown("---")
@@ -682,7 +777,7 @@ if st.button("📥 Fetch Data"):
                             )
 
                             def period_return(df_code, start_date, end_date):
-                                """Belirli tarih aralığında fiyat üzerinden yüzde getiri."""
+                                """Return % over the period based on price."""
                                 sub = df_code[
                                     (df_code["date"] >= start_date)
                                     & (df_code["date"] <= end_date)
@@ -696,13 +791,13 @@ if st.button("📥 Fetch Data"):
                                 return (p1 / p0 - 1.0) * 100
 
                             periods = [
-                                ("1 Week", 7),
-                                ("1 Month", 30),
-                                ("3 Months", 90),
-                                ("6 Months", 180),
-                                ("1 Year", 365),
-                                ("3 Years", 365 * 3),
-                                ("5 Years", 365 * 5),
+                                (_t("1 Hafta", "1 Week"), 7),
+                                (_t("1 Ay", "1 Month"), 30),
+                                (_t("3 Ay", "3 Months"), 90),
+                                (_t("6 Ay", "6 Months"), 180),
+                                (_t("1 Yıl", "1 Year"), 365),
+                                (_t("3 Yıl", "3 Years"), 365 * 3),
+                                (_t("5 Yıl", "5 Years"), 365 * 5),
                             ]
 
                             rows = []
@@ -737,20 +832,24 @@ if st.button("📥 Fetch Data"):
                                 st.dataframe(ret_df, hide_index=True)
                             else:
                                 st.info(
-                                    "Not enough price data to calculate returns."
+                                    "Not enough price data to calculate returns.",
                                 )
 
                 # -------- STATISTICS PAGE --------
-                elif main_page == "📈 Statistics":
-                    st.subheader("📌 Fund Statistics – Performance, Risk & Distribution")
+                elif main_page == "stats":
+                    st.subheader(
+                        "📌 Fund Statistics – Performance, Risk & Distribution",
+                    )
 
                     # ---------- FUND-LEVEL SUMMARY ----------
-                    st.markdown("### Fund-level Summary (Performance & Risk)")
+                    st.markdown(
+                        "### Fund-level Summary (Performance & Risk)"
+                    )
 
                     if "price" not in data.columns:
                         st.warning(
                             "⚠️ Column **'price'** is missing. "
-                            "Return and volatility statistics cannot be computed for this selection."
+                            "Return and volatility statistics cannot be computed for this selection.",
                         )
                     else:
                         stats_list = []
@@ -839,7 +938,7 @@ if st.button("📥 Fetch Data"):
                         if not stats_list:
                             st.info(
                                 "There is not enough price history in the selected date range "
-                                "to compute performance statistics for the chosen funds."
+                                "to compute performance statistics for the chosen funds.",
                             )
                         else:
                             stats_df = pd.DataFrame(stats_list)
@@ -878,12 +977,14 @@ if st.button("📥 Fetch Data"):
 
                     # ---------- PER-FUND DISTRIBUTION + COMMENTARY ----------
                     st.markdown("---")
-                    st.markdown("### Per-fund Return Distribution, Sharpe & Interpretation")
+                    st.markdown(
+                        "### Per-fund Return Distribution, Sharpe & Interpretation"
+                    )
 
                     if "price" not in data.columns:
                         st.warning(
                             "⚠️ Column **'price'** is missing. "
-                            "Daily returns, distribution and Sharpe ratio cannot be computed."
+                            "Daily returns, distribution and Sharpe ratio cannot be computed.",
                         )
                     else:
                         codes_unique = sorted(data["code"].unique())
@@ -906,7 +1007,7 @@ if st.button("📥 Fetch Data"):
                         if ret.empty:
                             st.info(
                                 f"There is not enough price data for **{selected_code_stats}** "
-                                f"in the selected period to compute return distribution."
+                                f"in the selected period to compute return distribution.",
                             )
                         else:
                             mean_ret = ret.mean() * 100
@@ -955,19 +1056,37 @@ if st.button("📥 Fetch Data"):
                             col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns(
                                 [1, 1, 1, 1, 1.6, 1, 1]
                             )
-                            col_a.metric("Mean Daily Return", f"{mean_ret:.2f}%")
+                            col_a.metric(
+                                "Mean Daily Return",
+                                f"{mean_ret:.2f}%",
+                            )
 
                             if ann_vol is not None:
-                                col_b.metric("Annual Volatility", f"{ann_vol:.2f}%")
+                                col_b.metric(
+                                    "Annual Volatility",
+                                    f"{ann_vol:.2f}%",
+                                )
                             else:
-                                col_b.metric("Annual Volatility", "Insufficient data")
+                                col_b.metric(
+                                    "Annual Volatility",
+                                    "Insufficient data",
+                                )
 
                             if sharpe is not None:
-                                col_c.metric("Sharpe (rf ≈ 0)", f"{sharpe:.2f}")
+                                col_c.metric(
+                                    "Sharpe (rf ≈ 0)",
+                                    f"{sharpe:.2f}",
+                                )
                             else:
-                                col_c.metric("Sharpe (rf ≈ 0)", "Not reliable")
+                                col_c.metric(
+                                    "Sharpe (rf ≈ 0)",
+                                    "Not reliable",
+                                )
 
-                            col_d.metric("Hit Ratio", f"{hit_ratio_pf:.2f}%")
+                            col_d.metric(
+                                "Hit Ratio",
+                                f"{hit_ratio_pf:.2f}%",
+                            )
                             col_e.metric(
                                 "Best / Worst Day",
                                 f"{best_day_pf:.2f}% / {worst_day_pf:.2f}%",
@@ -993,6 +1112,7 @@ if st.button("📥 Fetch Data"):
 
                             st.markdown("#### Automatic Interpretation")
 
+                            # Trend commentary
                             if mean_ret > 0.05:
                                 trend_text = (
                                     f"- **Trend:** The fund exhibits a clear positive bias with an "
@@ -1014,6 +1134,7 @@ if st.button("📥 Fetch Data"):
                                     f"average daily return of **{mean_ret:.2f}%**."
                                 )
 
+                            # Volatility commentary
                             if ann_vol is None:
                                 vol_text = (
                                     "- **Volatility:** There is not enough data to estimate "
@@ -1021,19 +1142,20 @@ if st.button("📥 Fetch Data"):
                                 )
                             else:
                                 if ann_vol < 5:
-                                    vol_bucket = "very low"
+                                    vol_bucket_en = "very low"
                                 elif ann_vol < 10:
-                                    vol_bucket = "low"
+                                    vol_bucket_en = "low"
                                 elif ann_vol < 20:
-                                    vol_bucket = "moderate"
+                                    vol_bucket_en = "moderate"
                                 else:
-                                    vol_bucket = "high"
+                                    vol_bucket_en = "high"
 
                                 vol_text = (
                                     f"- **Volatility:** Annualized volatility of "
-                                    f"**{ann_vol:.2f}%** can be classified as **{vol_bucket}**."
+                                    f"**{ann_vol:.2f}%** can be classified as **{vol_bucket_en}**."
                                 )
 
+                            # Hit ratio
                             if hit_ratio_pf >= 60:
                                 hit_text = (
                                     f"- **Consistency:** A hit ratio of **{hit_ratio_pf:.2f}%** "
@@ -1056,6 +1178,7 @@ if st.button("📥 Fetch Data"):
                                 f"drawdown over the period was around **{max_dd_pf:.2f}%**."
                             )
 
+                            # Sharpe
                             if sharpe is None:
                                 sharpe_text = (
                                     "- **Risk-adjusted Return (Sharpe):** The Sharpe ratio cannot be "
@@ -1063,20 +1186,21 @@ if st.button("📥 Fetch Data"):
                                 )
                             else:
                                 if sharpe > 1.5:
-                                    sharpe_quality = "strong"
+                                    q_en = "strong"
                                 elif sharpe > 1.0:
-                                    sharpe_quality = "solid"
+                                    q_en = "solid"
                                 elif sharpe > 0.5:
-                                    sharpe_quality = "acceptable"
+                                    q_en = "acceptable"
                                 else:
-                                    sharpe_quality = "weak"
+                                    q_en = "weak"
 
                                 sharpe_text = (
                                     f"- **Risk-adjusted Return (Sharpe):** A Sharpe ratio of "
-                                    f"**{sharpe:.2f}** points to **{sharpe_quality}** "
+                                    f"**{sharpe:.2f}** points to **{q_en}** "
                                     "risk-adjusted performance over the selected period."
                                 )
 
+                            # Calmar
                             if calmar_pf is None:
                                 calmar_text = (
                                     "- **Capital Efficiency (Calmar):** Calmar ratio cannot be "
@@ -1084,20 +1208,21 @@ if st.button("📥 Fetch Data"):
                                 )
                             else:
                                 if calmar_pf > 2:
-                                    calmar_quality = "very strong"
+                                    q_en = "very strong"
                                 elif calmar_pf > 1:
-                                    calmar_quality = "strong"
+                                    q_en = "strong"
                                 elif calmar_pf > 0.5:
-                                    calmar_quality = "moderate"
+                                    q_en = "moderate"
                                 else:
-                                    calmar_quality = "weak"
+                                    q_en = "weak"
 
                                 calmar_text = (
                                     f"- **Capital Efficiency (Calmar):** A Calmar ratio of "
-                                    f"**{calmar_pf:.2f}** suggests **{calmar_quality}** "
+                                    f"**{calmar_pf:.2f}** suggests **{q_en}** "
                                     "return per unit of maximum drawdown."
                                 )
 
+                            # Sortino
                             if sortino_pf is None:
                                 sortino_text = (
                                     "- **Downside Risk (Sortino):** Sortino ratio cannot be computed "
@@ -1105,17 +1230,17 @@ if st.button("📥 Fetch Data"):
                                 )
                             else:
                                 if sortino_pf > 2:
-                                    sortino_quality = "very strong"
+                                    q_en = "very strong"
                                 elif sortino_pf > 1:
-                                    sortino_quality = "strong"
+                                    q_en = "strong"
                                 elif sortino_pf > 0.5:
-                                    sortino_quality = "acceptable"
+                                    q_en = "acceptable"
                                 else:
-                                    sortino_quality = "weak"
+                                    q_en = "weak"
 
                                 sortino_text = (
                                     f"- **Downside Risk (Sortino):** A Sortino ratio of "
-                                    f"**{sortino_pf:.2f}** indicates **{sortino_quality}** "
+                                    f"**{sortino_pf:.2f}** indicates **{q_en}** "
                                     "return per unit of downside volatility."
                                 )
 
@@ -1134,15 +1259,15 @@ if st.button("📥 Fetch Data"):
                             )
 
                 # -------- PROBABILITY PAGE --------
-                elif main_page == "🎲 Probability":
+                elif main_page == "prob":
                     st.subheader(
-                        "📌 Probability Analysis – Monthly Up/Down & 12-month Scenarios"
+                        "📌 Probability Analysis – Monthly Up/Down & 12-month Scenarios",
                     )
 
                     if "price" not in data.columns:
                         st.warning(
                             "⚠️ Column **'price'** is missing. "
-                            "A monthly up/down probability model cannot be built for this selection."
+                            "A monthly up/down probability model cannot be built for this selection.",
                         )
                     else:
                         codes_unique = sorted(data["code"].unique())
@@ -1163,7 +1288,7 @@ if st.button("📥 Fetch Data"):
                         if d_prob.empty:
                             st.info(
                                 f"There is not enough price history for **{selected_code_prob}** "
-                                f"to run the probability model in the chosen period."
+                                f"to run the probability model in the chosen period.",
                             )
                         else:
                             monthly_price = (
@@ -1177,7 +1302,7 @@ if st.button("📥 Fetch Data"):
                             if monthly_ret.empty:
                                 st.info(
                                     "Monthly returns cannot be computed from the available data. "
-                                    "Try extending the date range for a longer history."
+                                    "Try extending the date range for a longer history.",
                                 )
                             else:
                                 n_m = len(monthly_ret)
@@ -1214,7 +1339,10 @@ if st.button("📥 Fetch Data"):
                                 st.markdown("#### Up-month probability")
 
                                 col5p, col6p, col7p = st.columns(3)
-                                col5p.metric("Empirical p(up)", f"{p_up_m*100:.1f}%")
+                                col5p.metric(
+                                    "Empirical p(up)",
+                                    f"{p_up_m*100:.1f}%",
+                                )
                                 col6p.metric(
                                     "95% CI (normal)",
                                     f"[{ci_low_m*100:.1f}%, {ci_up_m*100:.1f}%]",
@@ -1230,12 +1358,12 @@ if st.button("📥 Fetch Data"):
 - Based on **{n_m}** monthly observations, the probability that **{selected_code_prob}** closes a month *up* is about **{p_up_m*100:.1f}%**.
 - Using a **normal approximation**, the 95% confidence interval for this probability is roughly **{ci_low_m*100:.1f}% – {ci_up_m*100:.1f}%**.
 - Using **bootstrap resampling**, the 95% confidence interval is roughly **{boot_low_m*100:.1f}% – {boot_up_m*100:.1f}%**.
-                                    """
+"""
                                 )
 
                                 st.markdown("---")
                                 st.markdown(
-                                    "### 12-month Forward Scenarios (Binomial Model)"
+                                    "### 12-month Forward Scenarios (Binomial Model)",
                                 )
 
                                 months_forward = 12
@@ -1251,7 +1379,9 @@ if st.button("📥 Fetch Data"):
                                 prob_ge_9 = 1 - binom_cdf(8, months_forward, p_up_m)
                                 prob_le_5 = binom_cdf(5, months_forward, p_up_m)
 
-                                st.markdown("#### Scenario metrics (next 12 months)")
+                                st.markdown(
+                                    "#### Scenario metrics (next 12 months)"
+                                )
 
                                 c1, c2, c3 = st.columns(3)
                                 c1.metric(
@@ -1288,41 +1418,35 @@ if st.button("📥 Fetch Data"):
                                 )
                                 st.plotly_chart(fig_binom, use_container_width=True)
 
-                                summary_lines = [
+                                summary_lines_en = [
                                     "**Scenario Summary (12 months):**",
                                     "",
-                                    (
-                                        f"- If the future behaves similarly to the past, on average "
-                                        f"about **{E_X_12:.1f}** of the next 12 months are expected "
-                                        f"to close **up**."
-                                    ),
-                                    (
-                                        f"- The probability of having **at least 6** positive months "
-                                        f"is about **{prob_ge_6*100:.0f}%**."
-                                    ),
-                                    (
-                                        f"- A stronger “bullish” scenario with **at least 8** positive "
-                                        f"months has probability around **{prob_ge_8*100:.0f}%**, and a "
-                                        f"very strong year with **≥ 9** up months has probability "
-                                        f"roughly **{prob_ge_9*100:.0f}%**."
-                                    ),
-                                    (
-                                        f"- On the downside, the chance that **5 or fewer** months end "
-                                        f"positive (i.e. a negative-dominant year) is about "
-                                        f"**{prob_le_5*100:.0f}%**."
-                                    ),
+                                    f"- If the future behaves similarly to the past, on average "
+                                    f"about **{E_X_12:.1f}** of the next 12 months are expected "
+                                    f"to close **up**.",
+                                    f"- The probability of having **at least 6** positive months "
+                                    f"is about **{prob_ge_6*100:.0f}%**.",
+                                    f"- A stronger “bullish” scenario with **at least 8** positive "
+                                    f"months has probability around **{prob_ge_8*100:.0f}%**, and a "
+                                    f"very strong year with **≥ 9** up months has probability "
+                                    f"roughly **{prob_ge_9*100:.0f}%**.",
+                                    f"- On the downside, the chance that **5 or fewer** months end "
+                                    f"positive (i.e. a negative-dominant year) is about "
+                                    f"**{prob_le_5*100:.0f}%**.",
                                 ]
 
-                                st.markdown("\n".join(summary_lines))
+                                st.markdown("\n".join(summary_lines_en))
 
                 # -------- ARBITRAGE PAGE --------
-                elif main_page == "🔁 Arbitrage":
-                    st.subheader("🔁 Arbitrage / Relative Value")
+                elif main_page == "arb":
+                    st.subheader(
+                        "🔁 Arbitrage / Relative Value",
+                    )
 
                     if "price" not in data.columns:
                         st.warning(
                             "⚠️ Column **'price'** is missing. "
-                            "Arbitrage / relative value analysis cannot be computed."
+                            "Arbitrage / relative value analysis cannot be computed.",
                         )
                     else:
                         codes_unique = sorted(data["code"].unique())
@@ -1347,7 +1471,7 @@ if st.button("📥 Fetch Data"):
 
                         if len(d_single) < 30:
                             st.info(
-                                "At least 30 daily observations are required for mean-reversion analysis."
+                                "At least 30 daily observations are required for mean-reversion analysis.",
                             )
                         else:
                             window = 20
@@ -1364,19 +1488,27 @@ if st.button("📥 Fetch Data"):
                             d_last = d_single.dropna().iloc[-1]
 
                             col1a, col2a, col3a = st.columns(3)
-                            col1a.metric("Last Price", fmt_float(d_last["price"]))
+                            col1a.metric(
+                                "Last Price",
+                                fmt_float(d_last["price"]),
+                            )
                             col2a.metric(
-                                f"{window}-day Avg", fmt_float(d_last["roll_mean"])
+                                f"{window}-day Avg",
+                                fmt_float(d_last["roll_mean"]),
                             )
                             if not math.isnan(d_last["z_score"]):
                                 col3a.metric(
-                                    "Z-score (deviation)", f"{d_last['z_score']:.2f}"
+                                    "Z-score (deviation)",
+                                    f"{d_last['z_score']:.2f}",
                                 )
                             else:
-                                col3a.metric("Z-score (deviation)", "NA")
+                                col3a.metric(
+                                    "Z-score (deviation)",
+                                    "NA",
+                                )
 
                             st.caption(
-                                f"Price vs {window}-day moving average – potential mean-reversion areas."
+                                f"Price vs {window}-day moving average – potential mean-reversion areas.",
                             )
 
                             df_plot = d_single[["date", "price", "roll_mean"]].rename(
@@ -1436,9 +1568,10 @@ if st.button("📥 Fetch Data"):
 - The Z-score measures how many standard deviations today's price is away from the recent **{window}-day** average.
 - |Z| ≥ 2 typically marks an **extreme zone** in historical terms and may signal a potential **mean-reversion** opportunity.
 {comment_single}
-                                """
+"""
                             )
 
+                        # Pair / basket arbitrage
                         if len(codes_unique) >= 2:
                             st.markdown("---")
                             st.markdown(
@@ -1474,7 +1607,7 @@ if st.button("📥 Fetch Data"):
                                 or hedge_code not in pivot.columns
                             ):
                                 st.info(
-                                    "No overlapping price history for the selected pair of funds."
+                                    "No overlapping price history for the selected pair of funds.",
                                 )
                             else:
                                 pair = pivot[[base_code, hedge_code]].dropna()
@@ -1482,7 +1615,7 @@ if st.button("📥 Fetch Data"):
                                 if len(pair) < 60:
                                     st.info(
                                         "At least 60 overlapping observations are required "
-                                        "for pair arbitrage analysis."
+                                        "for pair arbitrage analysis.",
                                     )
                                 else:
                                     spread = np.log(
@@ -1508,7 +1641,7 @@ if st.button("📥 Fetch Data"):
 
                                     if df_spread.empty:
                                         st.info(
-                                            "Spread statistics could not be computed (no valid rolling window)."
+                                            "Spread statistics could not be computed (no valid rolling window).",
                                         )
                                     else:
                                         last_spread = df_spread["spread"].iloc[-1]
@@ -1600,9 +1733,9 @@ if st.button("📥 Fetch Data"):
 {spread_comment}
 
 > ⚠️ This is a purely statistical view. Transaction costs, liquidity, taxation, fund mandates, and regulations must all be considered before any real-world trade.
-                                            """
+"""
                                         )
                         else:
                             st.info(
-                                "Enter at least two different fund codes to enable pair arbitrage analysis."
+                                "Enter at least two different fund codes to enable pair arbitrage analysis.",
                             )
