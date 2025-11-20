@@ -1,10 +1,16 @@
 import streamlit as st
 import pandas as pd
-from tefas import Crawler
-from datetime import datetime
+import numpy as np
+import math
+from datetime import datetime, timedelta
 import plotly.express as px
 
+from tefas import Crawler
 
+
+# ------------------------------------------
+# TEFAS DATA FETCH
+# ------------------------------------------
 def fetch_tefas(codes, start, end, kind):
     crawler = Crawler()
     frames = []
@@ -14,37 +20,53 @@ def fetch_tefas(codes, start, end, kind):
             df["code"] = code
             frames.append(df)
         else:
-            st.warning(f"⚠️ No data found for: {code}")
+            st.warning(
+                f"⚠️ No TEFAS data returned for **{code}** in the selected date range. "
+                f"Please double-check the fund code, type and date range."
+            )
 
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames).sort_values("date")
 
 
+def fetch_tefas_all(start, end, kind=None):
+    """
+    Macro sekmesinde kullanılacak: tek fon kodu yerine,
+    seçilen türdeki (ya da tüm) fonları topluca çekmek için.
+    """
+    crawler = Crawler()
+    df = crawler.fetch(start=start, end=end, name=None, kind=kind)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    return df.sort_values("date")
+
+
 # ------------------------------------------
 # NUMBER FORMATTING HELPERS
 # ------------------------------------------
-
 def fmt_int(x):
     """Format like 2.411.844.935"""
     try:
         s = f"{int(float(x)):,}"
         return s.replace(",", ".")
-    except:
+    except Exception:
         return x
+
 
 def fmt_percent(x):
     """7.28 -> 7.28%"""
     try:
         return f"{float(x):.2f}%"
-    except:
+    except Exception:
         return x
+
 
 def fmt_float(x):
     """8.640000 -> 8.64"""
     try:
         return f"{float(x):.2f}"
-    except:
+    except Exception:
         return x
 
 
@@ -66,187 +88,1464 @@ def pretty(col_name: str) -> str:
 
 
 # ------------------------------------------
+# SIMPLE BINOMIAL HELPERS (no SciPy)
+# ------------------------------------------
+def binom_pmf(k: int, n: int, p: float) -> float:
+    return math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
+
+
+def binom_cdf(k: int, n: int, p: float) -> float:
+    return sum(binom_pmf(i, n, p) for i in range(0, k + 1))
+
+
+# ------------------------------------------
 # STREAMLIT DASHBOARD
 # ------------------------------------------
-
 st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
-st.title("📈 TEFAS Fund Dashboard")
 
-codes_text = st.text_input("Fund Codes (comma separated):", "SPN")
-kind = st.selectbox("Fund Type", ["YAT", "EMK", "BYF"])
+# --------- GENEL STİL (DARK + SOL MENÜ) ----------
+st.markdown(
+    """
+    <style>
+    .stApp { background-color: #020617; }
+    section[data-testid="stSidebar"] {
+        background-color: #020617;
+        border-right: 1px solid #111827;
+        padding-top: 0;
+    }
+    section[data-testid="stSidebar"] > div { padding-top: 0.5rem; }
 
-col1, col2 = st.columns(2)
-start = col1.date_input("Start Date", datetime(2025, 10, 19))
-end = col2.date_input("End Date", datetime(2025, 11, 18))
+    .side-section-title {
+        font-size: 0.70rem;
+        letter-spacing: 0.08em;
+        color: #9ca3af;
+        text-transform: uppercase;
+        margin-top: 1.2rem;
+        margin-bottom: 0.15rem;
+    }
 
+    div[data-testid="stRadio"] > label {
+        font-size: 0.75rem;
+        color: #9ca3af;
+        margin-bottom: 0.1rem;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] { gap: 0px; }
+    div[data-testid="stRadio"] button {
+        background-color: transparent;
+        border-radius: 0.35rem;
+        padding: 0.35rem 0.5rem;
+        color: #e5e7eb;
+        font-size: 0.86rem;
+        width: 100%;
+        justify-content: flex-start;
+        border: 0px;
+    }
+    div[data-testid="stRadio"] button[aria-checked="true"] {
+        background: linear-gradient(90deg, #0f172a, #111827);
+        border-left: 3px solid #3b82f6;
+        color: #ffffff;
+    }
+    div[data-testid="stRadio"] button[aria-checked="false"]:hover {
+        background-color: #030712;
+    }
 
+    div[data-testid="stMetric"] {
+        background-color: #020617;
+        padding: 0.6rem 0.8rem;
+        border-radius: 0.5rem;
+        border: 1px solid #1f2937;
+        text-align: center;
+    }
+    div[data-testid="stMetric"] > label {
+        font-size: 0.75rem;
+        color: #9CA3AF;
+    }
+    div[data-testid="stMetric"] > div {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #F9FAFB;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# --------- SIDEBAR (SOLDAN MENÜ) ----------
+with st.sidebar:
+    main_page = st.radio(
+        "Sections",
+        [
+            "🌐 Macro",
+            "📄 Raw Data",
+            "📌 Deltas",
+            "📊 Charts",
+            "🔍 Compare",      # ✅ yeni sekme
+            "📈 Statistics",
+            "🎲 Probability",
+            "🔁 Arbitrage",
+        ],
+        label_visibility="collapsed",
+        index=0,
+    )
+
+# --------- ANA SAYFA BAŞLIK ----------
+st.markdown(
+    "<h1 style='text-align: center;'>📈 TEFAS Fund Dashboard</h1>",
+    unsafe_allow_html=True,
+)
+
+# ==========================================
+# INPUTLAR
+# ==========================================
+
+if main_page == "🌐 Macro":
+    kind = st.selectbox("Fund Type", ["YAT", "EMK", "BYF"], key="kind_macro")
+    codes_text = ""  # kullanılmayacak
+else:
+    codes_text = st.text_input("Fund Codes (comma separated):", "SPN", key="codes_text")
+    kind = st.selectbox("Fund Type", ["YAT", "EMK", "BYF"], key="kind_normal")
+
+col1, col2, col3 = st.columns([1, 1, 1.2])
+
+default_start = datetime(2025, 10, 19)
+default_end = datetime(2025, 11, 18)
+
+start = col1.date_input("Start Date", default_start)
+end = col2.date_input("End Date", default_end)
+
+quick_range = col3.selectbox(
+    "Quick Range",
+    [
+        "Custom",
+        "Year-to-date (YTD)",
+        "Last 3 Months",
+        "Last 6 Months",
+        "Last 1 Year",
+    ],
+    index=0,
+    help="Choose a predefined date range or keep 'Custom' to use the selected start/end dates.",
+)
+
+# ------------------------------------------
+# FETCH BUTTON
+# ------------------------------------------
 if st.button("📥 Fetch Data"):
-    codes = [c.strip().upper() for c in codes_text.split(",") if c.strip()]
-    # st.info("⏳ Fetching data...")
+    effective_start = start
+    effective_end = end
+    today = datetime.today().date()
 
-    data = fetch_tefas(codes, str(start), str(end), kind)
+    if quick_range != "Custom":
+        if quick_range == "Year-to-date (YTD)":
+            effective_start = datetime(today.year, 1, 1).date()
+        elif quick_range == "Last 3 Months":
+            effective_start = today - timedelta(days=90)
+        elif quick_range == "Last 6 Months":
+            effective_start = today - timedelta(days=180)
+        elif quick_range == "Last 1 Year":
+            effective_start = today - timedelta(days=365)
+        effective_end = today
 
-    if data.empty:
-        st.error("❌ No data returned.")
-    else:
-        # st.success("✅ Data fetched successfully!")
-
-        # Date formatting (remove time part)
-        data["date"] = pd.to_datetime(data["date"]).dt.strftime("%Y-%m-%d")
-
-        # Move all-zero columns to the far right
-        data = move_zero_columns_last(data)
-
-        # ---------------------
-        # COLUMN GROUPS
-        # ---------------------
-        percent_cols_all = [
-            "other",
-            "government_bond",
-            "commercial_paper",
-            "stock",
-            "government_lease_certificates_tl",
-            "private_sector_bond",
-            "repo",
-            "asset_backed_securities",
-            "futures_cash_collateral",
-            "foreign_investment_fund_participation_shares",
-        ]
-        percent_cols = [c for c in percent_cols_all if c in data.columns]
-
-        int_cols_all = [
-            "market_cap",
-            "number_of_shares",
-            "number_of_investors",
-        ]
-        int_cols = [c for c in int_cols_all if c in data.columns]
-
-        # All other numeric columns (e.g. price, tmm, etc.)
-        float_cols = [
-            c for c in data.columns
-            if c not in int_cols + percent_cols
-            and pd.api.types.is_numeric_dtype(data[c])
-        ]
-
-        # For delta calculation we will use all numeric columns:
-        delta_cols = int_cols + percent_cols + float_cols
-
-        # ==========================
-        # TABS (ORDER: RAW → DELTAS → CHARTS)
-        # ==========================
-        tab_raw, tab_deltas, tab_charts = st.tabs(
-            ["Raw Data", "Deltas", "Charts"]
+    if effective_start > effective_end:
+        st.error(
+            "❌ Invalid date range: **Start Date** must be earlier than **End Date**. "
+            "Please adjust the dates or the quick filter."
         )
 
-        # -------- Raw Data Tab (FIRST) --------
-        with tab_raw:
-            st.subheader("🧾 Raw Data")
+    else:
+        # ======================================================
+        # 1) MACRO SEKME
+        # ======================================================
+        if main_page == "🌐 Macro":
+            macro_df = fetch_tefas_all(
+                str(effective_start), str(effective_end), kind=kind
+            )
 
-            display_map_raw = {col: pretty(col) for col in data.columns}
-            data_display = data.rename(columns=display_map_raw)
-
-            raw_format_map = {}
-            for col in int_cols:
-                raw_format_map[pretty(col)] = fmt_int
-            for col in percent_cols:
-                raw_format_map[pretty(col)] = fmt_percent
-            for col in float_cols:
-                raw_format_map[pretty(col)] = fmt_float
-
-            data_styled = data_display.style.format(raw_format_map)
-            st.dataframe(data_styled, hide_index=True)
-
-        # -------- Deltas Tab (MIDDLE) --------
-        with tab_deltas:
-            st.subheader("📌 Last Values (Δ vs Previous Day)")
-
-            delta_df = data.copy()
-            for c in delta_cols:
-                delta_df[c] = pd.to_numeric(delta_df[c], errors="coerce")
-
-            delta_df = delta_df.sort_values(["code", "date"])
-            delta_df[delta_cols] = delta_df.groupby("code")[delta_cols].diff()
-
-            delta_latest = delta_df.groupby("code").tail(1)
-            delta_latest = move_zero_columns_last(delta_latest)
-
-            display_map_delta = {}
-            for col in delta_latest.columns:
-                if col in delta_cols:
-                    display_map_delta[col] = "Δ " + pretty(col)
-                else:
-                    display_map_delta[col] = pretty(col)
-
-            delta_display = delta_latest.rename(columns=display_map_delta)
-
-            delta_format_map = {}
-            for col in int_cols:
-                delta_format_map["Δ " + pretty(col)] = fmt_int
-            for col in percent_cols:
-                delta_format_map["Δ " + pretty(col)] = fmt_percent
-            for col in float_cols:
-                delta_format_map["Δ " + pretty(col)] = fmt_float
-
-            delta_styled = delta_display.style.format(delta_format_map)
-            st.dataframe(delta_styled, hide_index=True)
-
-        # -------- Charts Tab (LAST) --------
-        with tab_charts:
-            st.subheader("📊 Price Chart")
-
-            # 1) Price chart (all codes)
-            fig_price = px.line(data, x="date", y="price", color="code")
-            st.plotly_chart(fig_price, use_container_width=True)
-
-            st.markdown("---")
-            st.subheader("📊 Asset Allocation – Latest Day")
-
-            if percent_cols:
-                codes_unique = sorted(data["code"].unique())
-                selected_code = st.selectbox(
-                    "Select code for allocation charts", codes_unique
+            if macro_df.empty:
+                st.error(
+                    "❌ Seçilen tarih aralığı ve tür için TEFAS'tan veri dönmedi. "
+                    "Tarih aralığını genişletmeyi veya fon türünü değiştirmeyi deneyin."
                 )
-
-                latest_alloc = (
-                    data[data["code"] == selected_code]
-                    .sort_values("date")
-                    .tail(1)
-                )
-
-                alloc_df = latest_alloc[percent_cols].T.reset_index()
-                alloc_df.columns = ["Category", "Value"]
-                alloc_df["Category"] = alloc_df["Category"].apply(pretty)
-
-                # Sıralama: büyükten küçüğe
-                alloc_df = alloc_df.sort_values("Value", ascending=False)
-
-                # 2) Pie chart
-                st.caption("Pie Chart")
-                fig_pie = px.pie(
-                    alloc_df,
-                    names="Category",
-                    values="Value",
-                    title=f"Asset Allocation (%) - {selected_code}",
-                    hole=0.35,
-                )
-                fig_pie.update_layout(height=500)
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-                # 3) Treemap – daha net, tam genişlik
-                st.caption("Treemap (sorted by weight)")
-                fig_tree = px.treemap(
-                    alloc_df,
-                    path=["Category"],
-                    values="Value",
-                    title=f"Asset Allocation Treemap - {selected_code}",
-                )
-                # Kutuların üstüne label + yüzde yaz
-                fig_tree.update_traces(
-                    texttemplate="%{label}<br>%{value:.2f}%",
-                    hovertemplate="<b>%{label}</b><br>Share: %{value:.2f}%<extra></extra>",
-                )
-                fig_tree.update_layout(height=600)
-                st.plotly_chart(fig_tree, use_container_width=True)
-
             else:
-                st.info("No allocation (percentage) columns available for allocation charts.")
+                macro_df["date"] = pd.to_datetime(macro_df["date"])
+                macro_df = move_zero_columns_last(macro_df)
+
+                # ---- Son gün ve metrikler ----
+                last_day = macro_df["date"].max()
+                latest = macro_df[macro_df["date"] == last_day].copy()
+
+                n_funds = latest["code"].nunique() if "code" in latest.columns else None
+
+                if "market_cap" in latest.columns:
+                    latest["market_cap"] = pd.to_numeric(
+                        latest["market_cap"], errors="coerce"
+                    )
+                    total_aum = latest["market_cap"].sum()
+                else:
+                    total_aum = None
+
+                col_m1, col_m2 = st.columns(2)
+                if n_funds is not None:
+                    col_m1.metric("Number of Funds", fmt_int(n_funds))
+                if total_aum is not None:
+                    col_m2.metric("Total AUM (Last Day)", fmt_int(total_aum))
+
+                # ---- Top 20 & Bottom 20 grafikleri ----
+                st.markdown("### Top & Bottom 20 Funds by AUM (Last Day)")
+
+                if "market_cap" in latest.columns:
+                    # Top 20
+                    top20 = latest.sort_values("market_cap", ascending=False).head(20)
+
+                    # Bottom 20
+                    bottom20 = latest.sort_values("market_cap", ascending=True).head(20)
+
+                    col_top, col_bottom = st.columns(2)
+
+                    # --- Top 20 ---
+                    with col_top:
+                        st.caption("Top 20 Funds")
+                        fig_top = px.bar(
+                            top20,
+                            x="code",
+                            y="market_cap",
+                            labels={"code": "Fund", "market_cap": "Market Cap"},
+                        )
+                        st.plotly_chart(fig_top, use_container_width=True)
+
+                    # --- Bottom 20 ---
+                    with col_bottom:
+                        st.caption("Bottom 20 Funds")
+                        fig_bottom = px.bar(
+                            bottom20,
+                            x="code",
+                            y="market_cap",
+                            labels={"code": "Fund", "market_cap": "Market Cap"},
+                        )
+                        st.plotly_chart(fig_bottom, use_container_width=True)
+
+                # ------- MACRO RAW DATA -------
+                st.markdown("---")
+                st.subheader("Macro Raw Data")
+
+                macro_df["date"] = macro_df["date"].dt.strftime("%Y-%m-%d")
+
+                # Kolon grupları
+                percent_cols_all = [
+                    "other",
+                    "government_bond",
+                    "commercial_paper",
+                    "stock",
+                    "government_lease_certificates_tl",
+                    "private_sector_bond",
+                    "repo",
+                    "asset_backed_securities",
+                    "futures_cash_collateral",
+                    "foreign_investment_fund_participation_shares",
+                ]
+                percent_cols_macro = [
+                    c for c in percent_cols_all if c in macro_df.columns
+                ]
+
+                int_cols_all = [
+                    "market_cap",
+                    "number_of_shares",
+                    "number_of_investors",
+                ]
+                int_cols_macro = [c for c in int_cols_all if c in macro_df.columns]
+
+                float_cols_macro = [
+                    c
+                    for c in macro_df.columns
+                    if c not in int_cols_macro + percent_cols_macro
+                    and pd.api.types.is_numeric_dtype(macro_df[c])
+                ]
+
+                display_map_macro = {col: pretty(col) for col in macro_df.columns}
+                macro_display = macro_df.rename(columns=display_map_macro)
+
+                macro_format_map = {}
+                for col in int_cols_macro:
+                    macro_format_map[pretty(col)] = fmt_int
+                for col in percent_cols_macro:
+                    macro_format_map[pretty(col)] = fmt_percent
+                for col in float_cols_macro:
+                    macro_format_map[pretty(col)] = fmt_float
+
+                macro_styled = macro_display.style.format(macro_format_map)
+                st.dataframe(macro_styled, hide_index=True)
+
+        # ======================================================
+        # 2) DİĞER SEKME LOGİĞİ
+        # ======================================================
+        else:
+            codes = [c.strip().upper() for c in codes_text.split(",") if c.strip()]
+            data = fetch_tefas(codes, str(effective_start), str(effective_end), kind)
+
+            if data.empty:
+                st.error(
+                    "❌ No data returned for the selected funds and date range. "
+                    "Try expanding the date range or confirming the fund codes and type."
+                )
+            else:
+                data["date"] = pd.to_datetime(data["date"]).dt.strftime("%Y-%m-%d")
+                data = move_zero_columns_last(data)
+
+                percent_cols_all = [
+                    "other",
+                    "government_bond",
+                    "commercial_paper",
+                    "stock",
+                    "government_lease_certificates_tl",
+                    "private_sector_bond",
+                    "repo",
+                    "asset_backed_securities",
+                    "futures_cash_collateral",
+                    "foreign_investment_fund_participation_shares",
+                ]
+                percent_cols = [c for c in percent_cols_all if c in data.columns]
+
+                int_cols_all = [
+                    "market_cap",
+                    "number_of_shares",
+                    "number_of_investors",
+                ]
+                int_cols = [c for c in int_cols_all if c in data.columns]
+
+                float_cols = [
+                    c
+                    for c in data.columns
+                    if c not in int_cols + percent_cols
+                    and pd.api.types.is_numeric_dtype(data[c])
+                ]
+
+                delta_cols = int_cols + percent_cols + float_cols
+
+                # -------- RAW DATA PAGE --------
+                if main_page == "📄 Raw Data":
+                    st.subheader("🧾 Raw Data")
+
+                    display_map_raw = {col: pretty(col) for col in data.columns}
+                    data_display = data.rename(columns=display_map_raw)
+
+                    raw_format_map = {}
+                    for col in int_cols:
+                        raw_format_map[pretty(col)] = fmt_int
+                    for col in percent_cols:
+                        raw_format_map[pretty(col)] = fmt_percent
+                    for col in float_cols:
+                        raw_format_map[pretty(col)] = fmt_float
+
+                    data_styled = data_display.style.format(raw_format_map)
+                    st.dataframe(data_styled, hide_index=True)
+
+                # -------- DELTAS PAGE --------
+                elif main_page == "📌 Deltas":
+                    st.subheader("📌 Last Values (Δ vs Previous Day)")
+
+                    delta_df = data.copy()
+                    for c in delta_cols:
+                        delta_df[c] = pd.to_numeric(delta_df[c], errors="coerce")
+
+                    delta_df = delta_df.sort_values(["code", "date"])
+                    delta_df[delta_cols] = delta_df.groupby("code")[delta_cols].diff()
+
+                    delta_latest = delta_df.groupby("code").tail(1)
+                    delta_latest = move_zero_columns_last(delta_latest)
+
+                    display_map_delta = {}
+                    for col in delta_latest.columns:
+                        if col in delta_cols:
+                            display_map_delta[col] = "Δ " + pretty(col)
+                        else:
+                            display_map_delta[col] = pretty(col)
+
+                    delta_display = delta_latest.rename(columns=display_map_delta)
+
+                    delta_format_map = {}
+                    for col in int_cols:
+                        delta_format_map["Δ " + pretty(col)] = fmt_int
+                    for col in percent_cols:
+                        delta_format_map["Δ " + pretty(col)] = fmt_percent
+                    for col in float_cols:
+                        delta_format_map["Δ " + pretty(col)] = fmt_float
+
+                    delta_styled = delta_display.style.format(delta_format_map)
+                    st.dataframe(delta_styled, hide_index=True)
+
+                # -------- CHARTS PAGE --------
+                elif main_page == "📊 Charts":
+                    st.subheader("📊 Price Chart")
+
+                    if "price" in data.columns:
+                        fig_price = px.line(data, x="date", y="price", color="code")
+                        fig_price.update_layout(
+                            title="Fund Price Evolution Over Time",
+                            xaxis_title="Date",
+                            yaxis_title="Price",
+                        )
+                        st.plotly_chart(fig_price, use_container_width=True)
+                    else:
+                        st.info(
+                            "⚠️ Column **'price'** is not available in the returned dataset. "
+                            "Price chart cannot be generated for this selection."
+                        )
+
+                    st.markdown("---")
+                    st.subheader("📊 Asset Allocation – Latest Day")
+
+                    if percent_cols:
+                        codes_unique = sorted(data["code"].unique())
+                        selected_code = st.selectbox(
+                            "Select fund for allocation charts", codes_unique
+                        )
+
+                        latest_alloc = (
+                            data[data["code"] == selected_code]
+                            .sort_values("date")
+                            .tail(1)
+                        )
+
+                        alloc_df = latest_alloc[percent_cols].T.reset_index()
+                        alloc_df.columns = ["Category", "Value"]
+                        alloc_df["Category"] = alloc_df["Category"].apply(pretty)
+                        alloc_df = alloc_df.sort_values("Value", ascending=False)
+
+                        st.caption("Pie Chart")
+                        fig_pie = px.pie(
+                            alloc_df,
+                            names="Category",
+                            values="Value",
+                            title=f"Asset Allocation (%) - {selected_code}",
+                            hole=0.35,
+                        )
+                        fig_pie.update_layout(height=500)
+                        st.plotly_chart(fig_pie, use_container_width=True)
+
+                        st.caption("Treemap (sorted by weight)")
+                        fig_tree = px.treemap(
+                            alloc_df,
+                            path=["Category"],
+                            values="Value",
+                            title=f"Asset Allocation Treemap - {selected_code}",
+                        )
+                        fig_tree.update_traces(
+                            texttemplate="%{label}<br>%{value:.2f}%",
+                            hovertemplate="<b>%{label}</b><br>Share: %{value:.2f}%<extra></extra>",
+                        )
+                        fig_tree.update_layout(height=600)
+                        st.plotly_chart(fig_tree, use_container_width=True)
+
+                    else:
+                        st.info(
+                            "No allocation (percentage) columns are available in the dataset. "
+                            "Allocation charts cannot be generated for this selection."
+                        )
+
+                # -------- COMPARE PAGE --------
+                elif main_page == "🔍 Compare":
+                    st.subheader("🔍 Compare Funds")
+
+                    if "price" not in data.columns:
+                        st.warning(
+                            "⚠️ Column **'price'** is missing. "
+                            "The Compare tab requires the price column to calculate returns."
+                        )
+                    else:
+                        all_codes = sorted(data["code"].unique())
+                        selected_codes = st.multiselect(
+                            "Select funds (at least 1):",
+                            all_codes,
+                            default=all_codes,
+                        )
+
+                        if len(selected_codes) == 0:
+                            st.info("Select at least one fund to compare.")
+                        else:
+                            comp = data[data["code"].isin(selected_codes)].copy()
+                            comp["date"] = pd.to_datetime(comp["date"])
+                            comp["price"] = pd.to_numeric(
+                                comp["price"], errors="coerce"
+                            )
+                            comp = comp.dropna(subset=["price"])
+
+                            # ---- Son gün metrik tablosu (TEFAS benzeri) ----
+                            last_rows = (
+                                comp.sort_values(["code", "date"])
+                                .groupby("code")
+                                .tail(1)
+                            )
+
+                            metric_cols = []
+                            if "market_cap" in last_rows.columns:
+                                metric_cols.append("market_cap")
+                            if "number_of_investors" in last_rows.columns:
+                                metric_cols.append("number_of_investors")
+                            if "risk" in last_rows.columns:
+                                metric_cols.append("risk")
+                            if "risk_value" in last_rows.columns:
+                                metric_cols.append("risk_value")
+
+                            for c in [
+                                "management_fee",
+                                "withholding_tax_rate",
+                                "market_share",
+                                "fund_management_fee",
+                                "fund_market_share",
+                            ]:
+                                if c in last_rows.columns and c not in metric_cols:
+                                    metric_cols.append(c)
+
+                            metrics_table = []
+                            for col in metric_cols:
+                                row = {"Metric": pretty(col)}
+                                for code in selected_codes:
+                                    val = last_rows[last_rows["code"] == code][col]
+                                    if val.empty:
+                                        row[code] = "-"
+                                    else:
+                                        v = val.iloc[0]
+                                        if col in ["market_cap", "number_of_investors"]:
+                                            row[code] = fmt_int(v)
+                                        else:
+                                            row[code] = fmt_percent(v)
+                                metrics_table.append(row)
+
+                            if metrics_table:
+                                mt_df = pd.DataFrame(metrics_table)
+                                st.markdown("### Last Day Metrics")
+                                st.dataframe(mt_df, hide_index=True)
+                            else:
+                                st.info(
+                                    "No metric columns available for selected funds."
+                                )
+
+                            st.markdown("---")
+                            st.markdown(
+                                "### Return Analysis (1W, 1M, 3M, 6M, YTD, 1Y, 3Y, 5Y)"
+                            )
+
+                            def period_return(df_code, start_date, end_date):
+                                """Belirli tarih aralığında fiyat üzerinden yüzde getiri."""
+                                sub = df_code[
+                                    (df_code["date"] >= start_date)
+                                    & (df_code["date"] <= end_date)
+                                ].sort_values("date")
+                                if len(sub) < 2:
+                                    return np.nan
+                                p0 = sub["price"].iloc[0]
+                                p1 = sub["price"].iloc[-1]
+                                if p0 <= 0:
+                                    return np.nan
+                                return (p1 / p0 - 1.0) * 100
+
+                            periods = [
+                                ("1 Week", 7),
+                                ("1 Month", 30),
+                                ("3 Months", 90),
+                                ("6 Months", 180),
+                                ("1 Year", 365),
+                                ("3 Years", 365 * 3),
+                                ("5 Years", 365 * 5),
+                            ]
+
+                            rows = []
+                            for code in selected_codes:
+                                d_code = comp[comp["code"] == code].copy()
+                                if d_code.empty:
+                                    continue
+
+                                d_code = d_code.sort_values("date")
+                                end_date_code = d_code["date"].max()
+
+                                ytd_start = datetime(end_date_code.year, 1, 1)
+
+                                row_vals = {"Fund": code}
+
+                                for lbl, days in periods:
+                                    start_date = end_date_code - timedelta(days=days)
+                                    r = period_return(d_code, start_date, end_date_code)
+                                    row_vals[lbl] = (
+                                        fmt_percent(r) if not np.isnan(r) else "-"
+                                    )
+
+                                r_ytd = period_return(d_code, ytd_start, end_date_code)
+                                row_vals["Year-To-Date"] = (
+                                    fmt_percent(r_ytd) if not np.isnan(r_ytd) else "-"
+                                )
+
+                                rows.append(row_vals)
+
+                            if rows:
+                                ret_df = pd.DataFrame(rows)
+                                st.dataframe(ret_df, hide_index=True)
+                            else:
+                                st.info(
+                                    "Not enough price data to calculate returns."
+                                )
+
+                # -------- STATISTICS PAGE --------
+                elif main_page == "📈 Statistics":
+                    st.subheader("📌 Fund Statistics – Performance, Risk & Distribution")
+
+                    # ---------- FUND-LEVEL SUMMARY ----------
+                    st.markdown("### Fund-level Summary (Performance & Risk)")
+
+                    if "price" not in data.columns:
+                        st.warning(
+                            "⚠️ Column **'price'** is missing. "
+                            "Return and volatility statistics cannot be computed for this selection."
+                        )
+                    else:
+                        stats_list = []
+                        data_sorted = data.copy()
+                        data_sorted["date"] = pd.to_datetime(data_sorted["date"])
+                        data_sorted = data_sorted.sort_values(["code", "date"])
+                        data_sorted["price"] = pd.to_numeric(
+                            data_sorted["price"], errors="coerce"
+                        )
+
+                        for code, dfg in data_sorted.groupby("code"):
+                            dfg = dfg.dropna(subset=["price"])
+                            if len(dfg) < 2:
+                                continue
+
+                            prices = dfg["price"]
+                            first_price = prices.iloc[0]
+                            last_price = prices.iloc[-1]
+
+                            total_return = (last_price / first_price - 1.0) * 100
+                            daily_ret = prices.pct_change().dropna()
+
+                            if daily_ret.empty:
+                                ann_vol = None
+                                hit_ratio = None
+                                best_day = None
+                                worst_day = None
+                                sortino = None
+                            else:
+                                ann_vol = daily_ret.std() * (252 ** 0.5) * 100
+                                positive_days = (daily_ret > 0).sum()
+                                hit_ratio = positive_days / len(daily_ret) * 100
+                                best_day = daily_ret.max() * 100
+                                worst_day = daily_ret.min() * 100
+
+                                downside_ret = daily_ret[daily_ret < 0]
+                                if downside_ret.empty or downside_ret.std() == 0:
+                                    sortino = None
+                                else:
+                                    downside_std = downside_ret.std()
+                                    sortino = (
+                                        daily_ret.mean() / downside_std
+                                    ) * (252 ** 0.5)
+
+                            cum_max = prices.cummax()
+                            drawdown = prices / cum_max - 1
+                            max_dd = drawdown.min() * 100
+
+                            n_days = (dfg["date"].iloc[-1] - dfg["date"].iloc[0]).days
+                            if n_days > 0:
+                                ann_return = (last_price / first_price) ** (
+                                    252 / n_days
+                                ) - 1
+                            else:
+                                ann_return = None
+
+                            if ann_return is not None and max_dd < 0:
+                                calmar = ann_return / abs(max_dd / 100)
+                            else:
+                                calmar = None
+
+                            if "market_cap" in dfg.columns:
+                                aum = pd.to_numeric(
+                                    dfg["market_cap"], errors="coerce"
+                                ).mean()
+                            else:
+                                aum = None
+
+                            stats_list.append(
+                                {
+                                    "code": code,
+                                    "Period Start": dfg["date"].iloc[0].date(),
+                                    "Period End": dfg["date"].iloc[-1].date(),
+                                    "Total Return (%)": total_return,
+                                    "Annual Volatility (%)": ann_vol,
+                                    "Max Drawdown (%)": max_dd,
+                                    "Hit Ratio (%)": hit_ratio,
+                                    "Best Day (%)": best_day,
+                                    "Worst Day (%)": worst_day,
+                                    "Avg Market Cap": aum,
+                                    "Calmar Ratio": calmar,
+                                    "Sortino Ratio": sortino,
+                                }
+                            )
+
+                        if not stats_list:
+                            st.info(
+                                "There is not enough price history in the selected date range "
+                                "to compute performance statistics for the chosen funds."
+                            )
+                        else:
+                            stats_df = pd.DataFrame(stats_list)
+
+                            format_map = {
+                                "Total Return (%)": fmt_percent,
+                                "Annual Volatility (%)": fmt_percent,
+                                "Max Drawdown (%)": fmt_percent,
+                                "Hit Ratio (%)": fmt_percent,
+                                "Best Day (%)": fmt_percent,
+                                "Worst Day (%)": fmt_percent,
+                                "Avg Market Cap": fmt_int,
+                                "Calmar Ratio": fmt_float,
+                                "Sortino Ratio": fmt_float,
+                            }
+
+                            stats_df_display = stats_df.rename(
+                                columns={
+                                    "code": "Code",
+                                    "Period Start": "Start",
+                                    "Period End": "End",
+                                    "Total Return (%)": "Total Return",
+                                    "Annual Volatility (%)": "Ann. Volatility",
+                                    "Max Drawdown (%)": "Max Drawdown",
+                                    "Hit Ratio (%)": "Hit Ratio",
+                                    "Best Day (%)": "Best Day",
+                                    "Worst Day (%)": "Worst Day",
+                                    "Avg Market Cap": "Avg Market Cap",
+                                    "Calmar Ratio": "Calmar",
+                                    "Sortino Ratio": "Sortino",
+                                }
+                            )
+
+                            stats_styled = stats_df_display.style.format(format_map)
+                            st.dataframe(stats_styled, hide_index=True)
+
+                    # ---------- PER-FUND DISTRIBUTION + COMMENTARY ----------
+                    st.markdown("---")
+                    st.markdown("### Per-fund Return Distribution, Sharpe & Interpretation")
+
+                    if "price" not in data.columns:
+                        st.warning(
+                            "⚠️ Column **'price'** is missing. "
+                            "Daily returns, distribution and Sharpe ratio cannot be computed."
+                        )
+                    else:
+                        codes_unique = sorted(data["code"].unique())
+                        selected_code_stats = st.selectbox(
+                            "Select fund for distribution",
+                            codes_unique,
+                            key="dist_code",
+                        )
+
+                        d_stats = data[data["code"] == selected_code_stats].copy()
+                        d_stats["date"] = pd.to_datetime(d_stats["date"])
+                        d_stats = d_stats.sort_values("date")
+                        d_stats["price"] = pd.to_numeric(
+                            d_stats["price"], errors="coerce"
+                        )
+                        d_stats = d_stats.dropna(subset=["price"])
+
+                        ret = d_stats["price"].pct_change().dropna()
+
+                        if ret.empty:
+                            st.info(
+                                f"There is not enough price data for **{selected_code_stats}** "
+                                f"in the selected period to compute return distribution."
+                            )
+                        else:
+                            mean_ret = ret.mean() * 100
+
+                            if len(ret) < 2 or ret.std() == 0:
+                                ann_vol = None
+                                sharpe = None
+                            else:
+                                ann_vol = ret.std() * (252 ** 0.5) * 100
+                                sharpe = (ret.mean() / ret.std()) * (252 ** 0.5)
+
+                            downside_ret_pf = ret[ret < 0]
+                            if downside_ret_pf.empty or downside_ret_pf.std() == 0:
+                                sortino_pf = None
+                            else:
+                                downside_std_pf = downside_ret_pf.std()
+                                sortino_pf = (
+                                    ret.mean() / downside_std_pf
+                                ) * (252 ** 0.5)
+
+                            positive_days = (ret > 0).sum()
+                            hit_ratio_pf = positive_days / len(ret) * 100
+
+                            best_day_pf = ret.max() * 100
+                            worst_day_pf = ret.min() * 100
+
+                            cum_max_pf = d_stats["price"].cummax()
+                            drawdown_pf = d_stats["price"] / cum_max_pf - 1
+                            max_dd_pf = drawdown_pf.min() * 100
+
+                            n_days_pf = (
+                                d_stats["date"].iloc[-1] - d_stats["date"].iloc[0]
+                            ).days
+                            if n_days_pf > 0:
+                                ann_return_pf = (
+                                    d_stats["price"].iloc[-1] / d_stats["price"].iloc[0]
+                                ) ** (252 / n_days_pf) - 1
+                            else:
+                                ann_return_pf = None
+
+                            if ann_return_pf is not None and max_dd_pf < 0:
+                                calmar_pf = ann_return_pf / abs(max_dd_pf / 100)
+                            else:
+                                calmar_pf = None
+
+                            col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns(
+                                [1, 1, 1, 1, 1.6, 1, 1]
+                            )
+                            col_a.metric("Mean Daily Return", f"{mean_ret:.2f}%")
+
+                            if ann_vol is not None:
+                                col_b.metric("Annual Volatility", f"{ann_vol:.2f}%")
+                            else:
+                                col_b.metric("Annual Volatility", "Insufficient data")
+
+                            if sharpe is not None:
+                                col_c.metric("Sharpe (rf ≈ 0)", f"{sharpe:.2f}")
+                            else:
+                                col_c.metric("Sharpe (rf ≈ 0)", "Not reliable")
+
+                            col_d.metric("Hit Ratio", f"{hit_ratio_pf:.2f}%")
+                            col_e.metric(
+                                "Best / Worst Day",
+                                f"{best_day_pf:.2f}% / {worst_day_pf:.2f}%",
+                            )
+
+                            if calmar_pf is not None:
+                                col_f.metric("Calmar", f"{calmar_pf:.2f}")
+                            else:
+                                col_f.metric("Calmar", "NA")
+
+                            if sortino_pf is not None:
+                                col_g.metric("Sortino", f"{sortino_pf:.2f}")
+                            else:
+                                col_g.metric("Sortino", "NA")
+
+                            fig_hist = px.histogram(
+                                ret * 100,
+                                nbins=30,
+                                labels={"value": "Daily Return (%)"},
+                                title=f"{selected_code_stats} – Daily Return Distribution",
+                            )
+                            st.plotly_chart(fig_hist, use_container_width=True)
+
+                            st.markdown("#### Automatic Interpretation")
+
+                            if mean_ret > 0.05:
+                                trend_text = (
+                                    f"- **Trend:** The fund exhibits a clear positive bias with an "
+                                    f"average daily return of **{mean_ret:.2f}%**."
+                                )
+                            elif mean_ret > 0:
+                                trend_text = (
+                                    f"- **Trend:** The fund has a mildly positive drift with an "
+                                    f"average daily return of **{mean_ret:.2f}%**."
+                                )
+                            elif mean_ret < -0.05:
+                                trend_text = (
+                                    f"- **Trend:** The fund shows a negative bias with an "
+                                    f"average daily return of **{mean_ret:.2f}%**."
+                                )
+                            else:
+                                trend_text = (
+                                    f"- **Trend:** The fund is broadly flat over the period with an "
+                                    f"average daily return of **{mean_ret:.2f}%**."
+                                )
+
+                            if ann_vol is None:
+                                vol_text = (
+                                    "- **Volatility:** There is not enough data to estimate "
+                                    "a robust annualized volatility figure."
+                                )
+                            else:
+                                if ann_vol < 5:
+                                    vol_bucket = "very low"
+                                elif ann_vol < 10:
+                                    vol_bucket = "low"
+                                elif ann_vol < 20:
+                                    vol_bucket = "moderate"
+                                else:
+                                    vol_bucket = "high"
+
+                                vol_text = (
+                                    f"- **Volatility:** Annualized volatility of "
+                                    f"**{ann_vol:.2f}%** can be classified as **{vol_bucket}**."
+                                )
+
+                            if hit_ratio_pf >= 60:
+                                hit_text = (
+                                    f"- **Consistency:** A hit ratio of **{hit_ratio_pf:.2f}%** "
+                                    f"indicates that the fund finishes most days in positive territory."
+                                )
+                            elif hit_ratio_pf >= 40:
+                                hit_text = (
+                                    f"- **Consistency:** A hit ratio of **{hit_ratio_pf:.2f}%** "
+                                    f"suggests a fairly balanced mix of up and down days."
+                                )
+                            else:
+                                hit_text = (
+                                    f"- **Consistency:** A hit ratio of **{hit_ratio_pf:.2f}%** "
+                                    f"means the fund has more negative than positive days."
+                                )
+
+                            risk_text = (
+                                f"- **Risk Events:** The best single day was **{best_day_pf:.2f}%**, "
+                                f"the worst single day was **{worst_day_pf:.2f}%**, and the maximum "
+                                f"drawdown over the period was around **{max_dd_pf:.2f}%**."
+                            )
+
+                            if sharpe is None:
+                                sharpe_text = (
+                                    "- **Risk-adjusted Return (Sharpe):** The Sharpe ratio cannot be "
+                                    "reliably computed (insufficient history or near-zero volatility)."
+                                )
+                            else:
+                                if sharpe > 1.5:
+                                    sharpe_quality = "strong"
+                                elif sharpe > 1.0:
+                                    sharpe_quality = "solid"
+                                elif sharpe > 0.5:
+                                    sharpe_quality = "acceptable"
+                                else:
+                                    sharpe_quality = "weak"
+
+                                sharpe_text = (
+                                    f"- **Risk-adjusted Return (Sharpe):** A Sharpe ratio of "
+                                    f"**{sharpe:.2f}** points to **{sharpe_quality}** "
+                                    "risk-adjusted performance over the selected period."
+                                )
+
+                            if calmar_pf is None:
+                                calmar_text = (
+                                    "- **Capital Efficiency (Calmar):** Calmar ratio cannot be "
+                                    "computed reliably (no drawdown or insufficient history)."
+                                )
+                            else:
+                                if calmar_pf > 2:
+                                    calmar_quality = "very strong"
+                                elif calmar_pf > 1:
+                                    calmar_quality = "strong"
+                                elif calmar_pf > 0.5:
+                                    calmar_quality = "moderate"
+                                else:
+                                    calmar_quality = "weak"
+
+                                calmar_text = (
+                                    f"- **Capital Efficiency (Calmar):** A Calmar ratio of "
+                                    f"**{calmar_pf:.2f}** suggests **{calmar_quality}** "
+                                    "return per unit of maximum drawdown."
+                                )
+
+                            if sortino_pf is None:
+                                sortino_text = (
+                                    "- **Downside Risk (Sortino):** Sortino ratio cannot be computed "
+                                    "reliably (no downside volatility observed)."
+                                )
+                            else:
+                                if sortino_pf > 2:
+                                    sortino_quality = "very strong"
+                                elif sortino_pf > 1:
+                                    sortino_quality = "strong"
+                                elif sortino_pf > 0.5:
+                                    sortino_quality = "acceptable"
+                                else:
+                                    sortino_quality = "weak"
+
+                                sortino_text = (
+                                    f"- **Downside Risk (Sortino):** A Sortino ratio of "
+                                    f"**{sortino_pf:.2f}** indicates **{sortino_quality}** "
+                                    "return per unit of downside volatility."
+                                )
+
+                            st.markdown(
+                                "\n".join(
+                                    [
+                                        trend_text,
+                                        vol_text,
+                                        hit_text,
+                                        risk_text,
+                                        sharpe_text,
+                                        calmar_text,
+                                        sortino_text,
+                                    ]
+                                )
+                            )
+
+                # -------- PROBABILITY PAGE --------
+                elif main_page == "🎲 Probability":
+                    st.subheader(
+                        "📌 Probability Analysis – Monthly Up/Down & 12-month Scenarios"
+                    )
+
+                    if "price" not in data.columns:
+                        st.warning(
+                            "⚠️ Column **'price'** is missing. "
+                            "A monthly up/down probability model cannot be built for this selection."
+                        )
+                    else:
+                        codes_unique = sorted(data["code"].unique())
+                        selected_code_prob = st.selectbox(
+                            "Select fund for probability analysis",
+                            codes_unique,
+                            key="prob_code",
+                        )
+
+                        d_prob = data[data["code"] == selected_code_prob].copy()
+                        d_prob["date"] = pd.to_datetime(d_prob["date"])
+                        d_prob = d_prob.sort_values("date")
+                        d_prob["price"] = pd.to_numeric(
+                            d_prob["price"], errors="coerce"
+                        )
+                        d_prob = d_prob.dropna(subset=["price"])
+
+                        if d_prob.empty:
+                            st.info(
+                                f"There is not enough price history for **{selected_code_prob}** "
+                                f"to run the probability model in the chosen period."
+                            )
+                        else:
+                            monthly_price = (
+                                d_prob.set_index("date")["price"]
+                                .resample("M")
+                                .last()
+                                .dropna()
+                            )
+
+                            monthly_ret = monthly_price.pct_change().dropna()
+                            if monthly_ret.empty:
+                                st.info(
+                                    "Monthly returns cannot be computed from the available data. "
+                                    "Try extending the date range for a longer history."
+                                )
+                            else:
+                                n_m = len(monthly_ret)
+                                n_up_m = (monthly_ret > 0).sum()
+                                n_down_m = (monthly_ret < 0).sum()
+                                n_flat_m = (monthly_ret == 0).sum()
+
+                                p_up_m = n_up_m / n_m
+
+                                se_p = math.sqrt(p_up_m * (1 - p_up_m) / n_m)
+                                z95 = 1.96
+                                ci_low_m = max(0.0, p_up_m - z95 * se_p)
+                                ci_up_m = min(1.0, p_up_m + z95 * se_p)
+
+                                rng = np.random.default_rng(12345)
+                                B = 5000
+                                arr_m = (monthly_ret > 0).astype(int).values
+                                boot_ps_m = rng.choice(
+                                    arr_m, size=(B, len(arr_m)), replace=True
+                                ).mean(axis=1)
+                                boot_low_m, boot_up_m = np.percentile(
+                                    boot_ps_m, [2.5, 97.5]
+                                )
+
+                                st.markdown("#### Monthly history")
+
+                                col1p, col2p, col3p, col4p = st.columns(4)
+                                col1p.metric("Total Months", n_m)
+                                col2p.metric("Up Months", n_up_m)
+                                col3p.metric("Down Months", n_down_m)
+                                col4p.metric("Flat Months", n_flat_m)
+
+                                st.markdown("")
+                                st.markdown("#### Up-month probability")
+
+                                col5p, col6p, col7p = st.columns(3)
+                                col5p.metric("Empirical p(up)", f"{p_up_m*100:.1f}%")
+                                col6p.metric(
+                                    "95% CI (normal)",
+                                    f"[{ci_low_m*100:.1f}%, {ci_up_m*100:.1f}%]",
+                                )
+                                col7p.metric(
+                                    "95% CI (bootstrap)",
+                                    f"[{boot_low_m*100:.1f}%, {boot_up_m*100:.1f}%]",
+                                )
+
+                                st.markdown("#### Interpretation")
+                                st.markdown(
+                                    f"""
+- Based on **{n_m}** monthly observations, the probability that **{selected_code_prob}** closes a month *up* is about **{p_up_m*100:.1f}%**.
+- Using a **normal approximation**, the 95% confidence interval for this probability is roughly **{ci_low_m*100:.1f}% – {ci_up_m*100:.1f}%**.
+- Using **bootstrap resampling**, the 95% confidence interval is roughly **{boot_low_m*100:.1f}% – {boot_up_m*100:.1f}%**.
+                                    """
+                                )
+
+                                st.markdown("---")
+                                st.markdown(
+                                    "### 12-month Forward Scenarios (Binomial Model)"
+                                )
+
+                                months_forward = 12
+                                k_vals_12 = np.arange(0, months_forward + 1)
+                                pmf_12 = [
+                                    binom_pmf(k, months_forward, p_up_m)
+                                    for k in k_vals_12
+                                ]
+
+                                E_X_12 = months_forward * p_up_m
+                                prob_ge_6 = 1 - binom_cdf(5, months_forward, p_up_m)
+                                prob_ge_8 = 1 - binom_cdf(7, months_forward, p_up_m)
+                                prob_ge_9 = 1 - binom_cdf(8, months_forward, p_up_m)
+                                prob_le_5 = binom_cdf(5, months_forward, p_up_m)
+
+                                st.markdown("#### Scenario metrics (next 12 months)")
+
+                                c1, c2, c3 = st.columns(3)
+                                c1.metric(
+                                    "Expected # of positive months (12)",
+                                    f"{E_X_12:.2f}",
+                                )
+                                c2.metric(
+                                    "P(X ≥ 6 positive months)",
+                                    f"{prob_ge_6*100:.1f}%",
+                                )
+                                c3.metric(
+                                    "P(X ≥ 8 positive months)",
+                                    f"{prob_ge_8*100:.1f}%",
+                                )
+
+                                c4, c5 = st.columns(2)
+                                c4.metric(
+                                    "P(X ≥ 9 positive months)",
+                                    f"{prob_ge_9*100:.1f}%",
+                                )
+                                c5.metric(
+                                    "P(X ≤ 5 positive months)",
+                                    f"{prob_le_5*100:.1f}%",
+                                )
+
+                                fig_binom = px.bar(
+                                    x=k_vals_12,
+                                    y=pmf_12,
+                                    labels={
+                                        "x": "Number of positive months in 12",
+                                        "y": "Probability",
+                                    },
+                                    title=f"{selected_code_prob} – Binomial Distribution for Next 12 Months",
+                                )
+                                st.plotly_chart(fig_binom, use_container_width=True)
+
+                                summary_lines = [
+                                    "**Scenario Summary (12 months):**",
+                                    "",
+                                    (
+                                        f"- If the future behaves similarly to the past, on average "
+                                        f"about **{E_X_12:.1f}** of the next 12 months are expected "
+                                        f"to close **up**."
+                                    ),
+                                    (
+                                        f"- The probability of having **at least 6** positive months "
+                                        f"is about **{prob_ge_6*100:.0f}%**."
+                                    ),
+                                    (
+                                        f"- A stronger “bullish” scenario with **at least 8** positive "
+                                        f"months has probability around **{prob_ge_8*100:.0f}%**, and a "
+                                        f"very strong year with **≥ 9** up months has probability "
+                                        f"roughly **{prob_ge_9*100:.0f}%**."
+                                    ),
+                                    (
+                                        f"- On the downside, the chance that **5 or fewer** months end "
+                                        f"positive (i.e. a negative-dominant year) is about "
+                                        f"**{prob_le_5*100:.0f}%**."
+                                    ),
+                                ]
+
+                                st.markdown("\n".join(summary_lines))
+
+                # -------- ARBITRAGE PAGE --------
+                elif main_page == "🔁 Arbitrage":
+                    st.subheader("🔁 Arbitrage / Relative Value")
+
+                    if "price" not in data.columns:
+                        st.warning(
+                            "⚠️ Column **'price'** is missing. "
+                            "Arbitrage / relative value analysis cannot be computed."
+                        )
+                    else:
+                        codes_unique = sorted(data["code"].unique())
+
+                        st.markdown(
+                            "### Single Fund – Mean Reversion vs Recent History"
+                        )
+
+                        selected_code_single = st.selectbox(
+                            "Select fund (single-fund view)",
+                            codes_unique,
+                            key="arb_single",
+                        )
+
+                        d_single = data[data["code"] == selected_code_single].copy()
+                        d_single["date"] = pd.to_datetime(d_single["date"])
+                        d_single = d_single.sort_values("date")
+                        d_single["price"] = pd.to_numeric(
+                            d_single["price"], errors="coerce"
+                        )
+                        d_single = d_single.dropna(subset=["price"])
+
+                        if len(d_single) < 30:
+                            st.info(
+                                "At least 30 daily observations are required for mean-reversion analysis."
+                            )
+                        else:
+                            window = 20
+                            d_single["roll_mean"] = d_single["price"].rolling(
+                                window
+                            ).mean()
+                            d_single["roll_std"] = d_single["price"].rolling(
+                                window
+                            ).std()
+                            d_single["z_score"] = (
+                                d_single["price"] - d_single["roll_mean"]
+                            ) / d_single["roll_std"]
+
+                            d_last = d_single.dropna().iloc[-1]
+
+                            col1a, col2a, col3a = st.columns(3)
+                            col1a.metric("Last Price", fmt_float(d_last["price"]))
+                            col2a.metric(
+                                f"{window}-day Avg", fmt_float(d_last["roll_mean"])
+                            )
+                            if not math.isnan(d_last["z_score"]):
+                                col3a.metric(
+                                    "Z-score (deviation)", f"{d_last['z_score']:.2f}"
+                                )
+                            else:
+                                col3a.metric("Z-score (deviation)", "NA")
+
+                            st.caption(
+                                f"Price vs {window}-day moving average – potential mean-reversion areas."
+                            )
+
+                            df_plot = d_single[["date", "price", "roll_mean"]].rename(
+                                columns={
+                                    "date": "Date",
+                                    "price": "Price",
+                                    "roll_mean": f"{window}-day Avg",
+                                }
+                            )
+
+                            fig_single = px.line(
+                                df_plot,
+                                x="Date",
+                                y=["Price", f"{window}-day Avg"],
+                                title=f"{selected_code_single} – Price vs {window}-day Avg",
+                            )
+                            fig_single.update_layout(
+                                legend_title_text="Series",
+                                xaxis_title="Date",
+                                yaxis_title="Price",
+                            )
+                            st.plotly_chart(fig_single, use_container_width=True)
+
+                            if not math.isnan(d_last["z_score"]):
+                                z = d_last["z_score"]
+                                if z >= 2:
+                                    comment_single = (
+                                        "- The last price is **more than 2 standard deviations above** "
+                                        "its recent average → historically **expensive zone** "
+                                        "(potential trim/sell area, after risk checks)."
+                                    )
+                                elif z <= -2:
+                                    comment_single = (
+                                        "- The last price is **more than 2 standard deviations below** "
+                                        "its recent average → historically **cheap zone** "
+                                        "(potential add/buy area, after risk checks)."
+                                    )
+                                elif abs(z) < 1:
+                                    comment_single = (
+                                        "- The last price is **close to its recent average** → "
+                                        "no strong overbought/oversold signal."
+                                    )
+                                else:
+                                    comment_single = (
+                                        "- The last price shows a **moderate deviation** from the "
+                                        "average → signal is weak, can be monitored rather than traded."
+                                    )
+                            else:
+                                comment_single = (
+                                    "- Z-score cannot be computed reliably yet (insufficient volatility or data)."
+                                )
+
+                            st.markdown(
+                                f"""
+**Comment (single fund):**
+
+- The Z-score measures how many standard deviations today's price is away from the recent **{window}-day** average.
+- |Z| ≥ 2 typically marks an **extreme zone** in historical terms and may signal a potential **mean-reversion** opportunity.
+{comment_single}
+                                """
+                            )
+
+                        if len(codes_unique) >= 2:
+                            st.markdown("---")
+                            st.markdown(
+                                "### Pair / Basket – Relative Arbitrage Between Two Funds"
+                            )
+
+                            col_sel1, col_sel2 = st.columns(2)
+                            base_code = col_sel1.selectbox(
+                                "Base fund (long leg)",
+                                codes_unique,
+                                key="arb_base",
+                            )
+                            hedge_candidates = [c for c in codes_unique if c != base_code]
+                            hedge_code = col_sel2.selectbox(
+                                "Hedge fund (short leg)",
+                                hedge_candidates,
+                                key="arb_hedge",
+                            )
+
+                            df_price = data[["date", "code", "price"]].copy()
+                            df_price["date"] = pd.to_datetime(df_price["date"])
+                            df_price["price"] = pd.to_numeric(
+                                df_price["price"], errors="coerce"
+                            )
+                            df_price = df_price.dropna(subset=["price"])
+
+                            pivot = df_price.pivot_table(
+                                index="date", columns="code", values="price"
+                            )
+
+                            if (
+                                base_code not in pivot.columns
+                                or hedge_code not in pivot.columns
+                            ):
+                                st.info(
+                                    "No overlapping price history for the selected pair of funds."
+                                )
+                            else:
+                                pair = pivot[[base_code, hedge_code]].dropna()
+
+                                if len(pair) < 60:
+                                    st.info(
+                                        "At least 60 overlapping observations are required "
+                                        "for pair arbitrage analysis."
+                                    )
+                                else:
+                                    spread = np.log(
+                                        pair[base_code] / pair[hedge_code]
+                                    )
+                                    window_spread = 60
+                                    spread_mean = spread.rolling(window_spread).mean()
+                                    spread_std = spread.rolling(window_spread).std()
+
+                                    df_spread = pd.DataFrame(
+                                        {
+                                            "date": spread.index,
+                                            "spread": spread.values,
+                                            "mean": spread_mean.values,
+                                            "+1σ": (
+                                                spread_mean + spread_std
+                                            ).values,
+                                            "-1σ": (
+                                                spread_mean - spread_std
+                                            ).values,
+                                        }
+                                    ).dropna()
+
+                                    if df_spread.empty:
+                                        st.info(
+                                            "Spread statistics could not be computed (no valid rolling window)."
+                                        )
+                                    else:
+                                        last_spread = df_spread["spread"].iloc[-1]
+                                        last_mean = df_spread["mean"].iloc[-1]
+                                        last_std = (
+                                            df_spread["+1σ"].iloc[-1] - last_mean
+                                        )
+
+                                        if last_std > 0:
+                                            last_z = (
+                                                last_spread - last_mean
+                                            ) / last_std
+                                        else:
+                                            last_z = float("nan")
+
+                                        c1b, c2b, c3b = st.columns(3)
+                                        c1b.metric(
+                                            "Last log spread",
+                                            f"{last_spread:.4f}",
+                                        )
+                                        c2b.metric(
+                                            "Spread Z-score",
+                                            f"{last_z:.2f}"
+                                            if not math.isnan(last_z)
+                                            else "NA",
+                                        )
+                                        c3b.metric(
+                                            "Rolling window",
+                                            f"{window_spread} days",
+                                        )
+
+                                        df_spread_plot = df_spread.rename(
+                                            columns={
+                                                "date": "Date",
+                                                "spread": "Spread",
+                                                "mean": "Mean",
+                                            }
+                                        )
+
+                                        fig_spread = px.line(
+                                            df_spread_plot,
+                                            x="Date",
+                                            y=["Spread", "Mean", "+1σ", "-1σ"],
+                                            title=(
+                                                f"{base_code}/{hedge_code} – Log spread & bands "
+                                                f"(rolling {window_spread}-day)"
+                                            ),
+                                        )
+                                        fig_spread.update_layout(
+                                            xaxis_title="Date",
+                                            yaxis_title="log(P_base / P_hedge)",
+                                        )
+                                        st.plotly_chart(
+                                            fig_spread, use_container_width=True
+                                        )
+
+                                        if not math.isnan(last_z):
+                                            if last_z >= 2:
+                                                spread_comment = (
+                                                    f"- Spread Z-score ≈ **{last_z:.2f}** → "
+                                                    f"**{base_code}** looks **expensive vs {hedge_code}**. "
+                                                    "Classical mean-reversion setup: consider **short base / long hedge** "
+                                                    "(after checking liquidity, costs and risk)."
+                                                )
+                                            elif last_z <= -2:
+                                                spread_comment = (
+                                                    f"- Spread Z-score ≈ **{last_z:.2f}** → "
+                                                    f"**{base_code}** looks **cheap vs {hedge_code}**. "
+                                                    "Classical mean-reversion setup: consider **long base / short hedge**."
+                                                )
+                                            else:
+                                                spread_comment = (
+                                                    f"- Spread Z-score ≈ **{last_z:.2f}** → spread is "
+                                                    "within its normal band; no clear arbitrage signal."
+                                                )
+                                        else:
+                                            spread_comment = (
+                                                "- Spread Z-score cannot be computed reliably "
+                                                "(zero volatility in the rolling window)."
+                                            )
+
+                                        st.markdown(
+                                            f"""
+**Comment (pair trade):**
+
+- We define spread = log( Price({base_code}) / Price({hedge_code}) ).  
+- If the spread is mean-reverting, deviations from its long-run band may offer **relative value** opportunities.
+- |Z| ≥ 2 typically flags **extreme relative mispricing** and is often used as a threshold in pairs trading.
+{spread_comment}
+
+> ⚠️ This is a purely statistical view. Transaction costs, liquidity, taxation, fund mandates, and regulations must all be considered before any real-world trade.
+                                            """
+                                        )
+                        else:
+                            st.info(
+                                "Enter at least two different fund codes to enable pair arbitrage analysis."
+                            )
