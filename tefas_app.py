@@ -1,11 +1,11 @@
 import streamlit as st
 import hashlib
 
-st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
+def _hash_password(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode()).hexdigest()
 
 def check_password():
-    # Şifreyi secrets'tan alıyoruz
-    REAL_PASSWORD = st.secrets["auth"]["password"]
+    REAL_HASH = st.secrets["auth"]["password_hash"]
 
     if "password_ok" not in st.session_state:
         st.session_state["password_ok"] = False
@@ -13,16 +13,15 @@ def check_password():
     if not st.session_state["password_ok"]:
         st.markdown("### 🔒 Access Protection")
         password = st.text_input("Enter the password:", type="password")
+
         if st.button("Login"):
-            if password == REAL_PASSWORD:
+            if _hash_password(password) == REAL_HASH:
                 st.session_state["password_ok"] = True
-                st.experimental_rerun()
+                st.rerun()                # ✔️ DOĞRU KOMUT (experimental değil)
             else:
                 st.error("❌ Wrong password")
 
         st.stop()
-
-check_password()
 
 import streamlit as st
 import pandas as pd
