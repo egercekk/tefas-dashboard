@@ -11,9 +11,9 @@ def check_password():
         st.session_state["password_ok"] = False
 
     if not st.session_state["password_ok"]:
-        st.markdown("### 🔒 Erişim Koruması")
-        password = st.text_input("Şifreyi girin:", type="password")
-        if st.button("Giriş"):
+        st.markdown("### 🔒 Access Protection")
+        password = st.text_input("Enter the password:", type="password")
+        if st.button("Login"):
             if password == REAL_PASSWORD:
                 st.session_state["password_ok"] = True
                 st.experimental_rerun()
