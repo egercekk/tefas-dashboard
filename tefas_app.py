@@ -1,4 +1,38 @@
 import streamlit as st
+import hashlib
+
+st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
+
+# -------- Basit Şifre Koruması --------
+def check_password():
+
+    def _hash_password(password):
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    # Şifreyi burada belirle (örnek: "team123")
+    # İstersen hash’ini kullan:
+    PASSWORD_HASH = _hash_password("team123")
+
+    if "password_ok" not in st.session_state:
+        st.session_state["password_ok"] = False
+
+    if not st.session_state["password_ok"]:
+        st.markdown("### 🔒 Erişim Koruması")
+        password = st.text_input("Şifreyi girin:", type="password")
+        if st.button("Giriş"):
+            if _hash_password(password) == PASSWORD_HASH:
+                st.session_state["password_ok"] = True
+                st.experimental_rerun()
+            else:
+                st.error("❌ Yanlış şifre")
+
+        st.stop()  # aşağıdaki kodlar çalışmasın
+
+check_password()
+# -------- Şifre doğruysa buradan sonrası çalışır --------
+
+
+import streamlit as st
 import pandas as pd
 import numpy as np
 import math
