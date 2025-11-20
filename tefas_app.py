@@ -1,10 +1,7 @@
 import streamlit as st
 import hashlib
 
-st.set_page_config(page_title="TEFAS Dashboard", page_icon="📈", layout="wide")
-
 def check_password():
-    # Şifreyi secrets'tan alıyoruz
     REAL_PASSWORD = st.secrets["auth"]["password"]
 
     if "password_ok" not in st.session_state:
@@ -12,18 +9,17 @@ def check_password():
 
     if not st.session_state["password_ok"]:
         st.markdown("### 🔒 Access Protection")
+
         password = st.text_input("Enter the password:", type="password")
+
         if st.button("Login"):
             if password == REAL_PASSWORD:
                 st.session_state["password_ok"] = True
-                st.experimental_rerun()
+                st.rerun()          # ✔️ Yeni doğru kullanım
             else:
-                st.error("❌ Yanlış şifre")
+                st.error("❌ Wrong password")
 
-        st.stop()
-
-check_password()
-# Buradan sonrası artık senin mevcut TEFAS dashboard kodun
+        st.stop()  # Şifre girilmeden uygulamanın devamı çalışmasın
 
 
 import streamlit as st
